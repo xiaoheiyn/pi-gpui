@@ -3906,6 +3906,7 @@ version = "0.2.8"
 dependencies = [
  "base64 0.23.1",
  "block",
+ "dunce",
  "futures",
  "gpui-fast",
  "gpui-fast-platform",

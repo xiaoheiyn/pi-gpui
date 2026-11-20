@@ -685,7 +685,7 @@ impl HubView {
         let request = crate::open_url::parse(url);
         let Some(workspace) = request
             .as_ref()
-            .and_then(|request| PathBuf::from(&request.workspace).canonicalize().ok())
+            .and_then(|request| crate::platform::canonicalize(&request.workspace).ok())
             .filter(|path| path.is_dir())
         else {
             self.notice = Some((
@@ -713,7 +713,7 @@ impl HubView {
     }
 
     fn add_workspace(&mut self, path: PathBuf, cx: &mut Context<Self>) {
-        let path = path.canonicalize().unwrap_or(path);
+        let path = crate::platform::canonicalize(&path).unwrap_or(path);
         if let Some(entry) = self.entry_mut(&path) {
             entry.expanded = true;
         } else {
@@ -1369,7 +1369,7 @@ impl HubView {
         let Some(workspace) = params["workspace"]
             .as_str()
             .map(PathBuf::from)
-            .and_then(|path| path.canonicalize().ok())
+            .and_then(|path| crate::platform::canonicalize(&path).ok())
             .filter(|path| path.is_dir())
         else {
             reply.finish(
@@ -3105,6 +3105,9 @@ impl HubView {
                 details = Some(format!("Found {}", installation.executable.display()));
             }
             pi::CheckError::Unsupported { installation } => {
+                body.push(hint(
+                    "Install a compatible Pi GPUI release or use a supported pi version.".into(),
+                ));
                 actions = actions.child(check_again);
                 details = Some(format!(
                     "Found pi {} at {}",

@@ -55,9 +55,7 @@ pub fn link_file(original: &Path) -> std::io::Result<PathBuf> {
     #[cfg(unix)]
     std::os::unix::fs::symlink(original, &link)?;
     #[cfg(windows)]
-    if std::fs::hard_link(original, &link).is_err() {
-        std::fs::copy(original, &link)?;
-    }
+    std::fs::hard_link(original, &link)?;
     Ok(link)
 }
 
@@ -69,14 +67,14 @@ pub fn save_clipboard_image(image: &gpui::Image) -> std::io::Result<PathBuf> {
     let extension = match image.format {
         ImageFormat::Png => "png",
         ImageFormat::Tiff => {
-            if cfg!(target_os = "macos") {
+            if !cfg!(windows) {
                 "png"
             } else {
                 "tiff"
             }
         }
         ImageFormat::Bmp => {
-            if cfg!(target_os = "macos") {
+            if !cfg!(windows) {
                 "png"
             } else {
                 "bmp"
@@ -91,7 +89,7 @@ pub fn save_clipboard_image(image: &gpui::Image) -> std::io::Result<PathBuf> {
     };
     let path = std::env::temp_dir().join(format!("pi-clipboard-{}.{extension}", unique_id()));
     match image.format {
-        #[cfg(target_os = "macos")]
+        #[cfg(not(windows))]
         ImageFormat::Tiff | ImageFormat::Bmp => {
             let source = path.with_extension(if image.format == ImageFormat::Tiff {
                 "tiff"
@@ -121,7 +119,9 @@ pub fn save_clipboard_image(image: &gpui::Image) -> std::io::Result<PathBuf> {
 pub fn image_paths_in(text: &str) -> Vec<PathBuf> {
     let mut found = Vec::new();
     let mut search_from = 0;
-    while let Some(relative) = text[search_from..].find('/') {
+    while let Some(relative) = text[search_from..].find(|character: char| {
+        character == '/' || cfg!(windows) && (character == '\\' || character.is_ascii_alphabetic())
+    }) {
         let start = search_from + relative;
         search_from = start + 1;
         let starts_word = text[..start]
@@ -132,6 +132,12 @@ pub fn image_paths_in(text: &str) -> Vec<PathBuf> {
             continue;
         }
         let rest = &text[start..];
+        if cfg!(windows)
+            && rest.as_bytes()[0].is_ascii_alphabetic()
+            && rest.as_bytes().get(1) != Some(&b':')
+        {
+            continue;
+        }
         let mut best = None;
         for (index, _) in rest.match_indices('.') {
             let tail = &rest[index + 1..];
@@ -146,7 +152,10 @@ pub fn image_paths_in(text: &str) -> Vec<PathBuf> {
                 .chars()
                 .next()
                 .is_none_or(|character| character.is_whitespace() || "\"').,`".contains(character));
-            if ends_word && Path::new(&rest[..end]).is_file() {
+            if ends_word
+                && Path::new(&rest[..end]).is_absolute()
+                && Path::new(&rest[..end]).is_file()
+            {
                 best = Some(end);
             }
             if rest[..index].contains('\n') {
@@ -263,7 +272,7 @@ impl Picture {
 pub fn display_text(text: &str) -> String {
     let temp = std::env::temp_dir();
     let temp = temp.to_string_lossy();
-    let temp = temp.trim_end_matches('/');
+    let temp = temp.trim_end_matches(std::path::is_separator);
     if !text.contains(temp) {
         return text.to_string();
     }
@@ -272,25 +281,29 @@ pub fn display_text(text: &str) -> String {
     while let Some(position) = rest.find(temp) {
         out.push_str(&rest[..position]);
         let after = &rest[position + temp.len()..];
-        let after = after.strip_prefix('/').unwrap_or(after);
+        let after = after.strip_prefix(std::path::is_separator).unwrap_or(after);
         let replaced = if after.starts_with("pi-clipboard-") {
             let end = after.find(char::is_whitespace).unwrap_or(after.len());
             Some(("[Image]".to_string(), end))
-        } else if let Some(tail) = after.strip_prefix("pi-gpui-attachments/") {
-            tail.split_once('/').and_then(|(id, name_and_rest)| {
-                let directory = std::env::temp_dir().join("pi-gpui-attachments").join(id);
-                let name = std::fs::read_dir(directory)
-                    .ok()?
-                    .flatten()
-                    .next()?
-                    .file_name()
-                    .to_string_lossy()
-                    .into_owned();
-                name_and_rest.starts_with(&name).then(|| {
-                    let consumed = "pi-gpui-attachments/".len() + id.len() + 1 + name.len();
-                    (format!("[{name}]"), consumed)
+        } else if let Some(tail) = after
+            .strip_prefix("pi-gpui-attachments")
+            .and_then(|tail| tail.strip_prefix(std::path::is_separator))
+        {
+            tail.split_once(std::path::is_separator)
+                .and_then(|(id, name_and_rest)| {
+                    let directory = std::env::temp_dir().join("pi-gpui-attachments").join(id);
+                    let name = std::fs::read_dir(directory)
+                        .ok()?
+                        .flatten()
+                        .next()?
+                        .file_name()
+                        .to_string_lossy()
+                        .into_owned();
+                    name_and_rest.starts_with(&name).then(|| {
+                        let consumed = "pi-gpui-attachments/".len() + id.len() + 1 + name.len();
+                        (format!("[{name}]"), consumed)
+                    })
                 })
-            })
         } else {
             None
         };

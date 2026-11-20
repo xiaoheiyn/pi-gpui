@@ -65,7 +65,7 @@ fn main() {
         .nth(1)
         .filter(|_| initial_link.is_none())
         .map(PathBuf::from)
-        .map(|path| match path.canonicalize() {
+        .map(|path| match crate::platform::canonicalize(&path) {
             Ok(path) if path.is_dir() => path,
             Ok(path) => {
                 eprintln!("pi-gpui: {} is not a directory", path.display());

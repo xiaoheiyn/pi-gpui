@@ -36,6 +36,7 @@ gpui_platform = { package = "gpui-fast-platform", version = "=0.1.17", default-f
 
 [target.'cfg(target_os = "windows")'.dependencies]
 gpui_platform = { package = "gpui-fast-platform", version = "=0.1.17", default-features = false }
+dunce = "1"
 interprocess = "2.4"
 widestring = "1"
 windows-sys = { version = "0.61", features = ["Win32_System_Threading"] }

@@ -4,6 +4,11 @@
 // `objc` 0.2 macros probe a `cargo-clippy` feature that modern rustc flags.
 #![allow(unexpected_cfgs)]
 
+#[cfg(windows)]
+pub use dunce::canonicalize;
+#[cfg(unix)]
+pub use std::fs::canonicalize;
+
 use gpui::Window;
 
 /// Starts dragging the window from our custom title bar.

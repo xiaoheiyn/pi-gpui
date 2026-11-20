@@ -104,7 +104,7 @@ fn setting_session_dir(settings_path: &Path) -> Option<PathBuf> {
 /// `/Users/me/project` → `--Users-me-project--`, as documented in pi's session format.
 fn encode_workspace(workspace: &Path) -> String {
     let path = workspace.to_string_lossy();
-    let trimmed = path.trim_start_matches(['/', '\\']);
+    let trimmed = path.strip_prefix(['/', '\\']).unwrap_or(&path);
     format!("--{}--", trimmed.replace(['/', '\\', ':'], "-"))
 }
 
@@ -297,7 +297,7 @@ fn xdg_directory(variable: &str, fallback: &str) -> Option<PathBuf> {
 
 fn same_directory(cwd: &str, workspace: &Path) -> bool {
     let cwd = Path::new(cwd);
-    cwd == workspace || cwd.canonicalize().is_ok_and(|cwd| cwd == workspace)
+    cwd == workspace || crate::platform::canonicalize(cwd).is_ok_and(|cwd| cwd == workspace)
 }
 
 fn trim_line(line: &[u8]) -> &[u8] {
@@ -325,6 +325,10 @@ mod tests {
             encode_workspace(Path::new("/Users/me/projects/pi-gpui")),
             "--Users-me-projects-pi-gpui--"
         );
+        assert_eq!(
+            encode_workspace(Path::new("C:/Users/me/测试 项目")),
+            "--C--Users-me-测试 项目--"
+        );
     }
 
     #[test]
@@ -336,8 +340,8 @@ mod tests {
         let mut file = File::create(&session).expect("session file");
         writeln!(
             file,
-            r#"{{"type":"session","version":3,"id":"x","cwd":"{}"}}"#,
-            workspace.display()
+            "{}",
+            serde_json::json!({"type":"session","version":3,"id":"x","cwd":workspace})
         )
         .expect("write");
         writeln!(file, r#"{{"type":"message","id":"a","message":{{"role":"user","content":"  \nFirst question\nsecond line"}}}}"#).expect("write");
