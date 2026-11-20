@@ -32,7 +32,7 @@ curl -fsSL https://pi-gpui.dev/install.sh | sh
 
 The [script](site/install.sh) puts the app in `~/.local/pi-gpui.app`, links `~/.local/bin/pi-gpui` and adds a launcher entry. It needs no root. Or unpack `pi-gpui-*-linux-*.tar.gz` from [Releases](https://github.com/bytesbay/pi-gpui/releases) yourself. It runs on X11 and Wayland and needs glibc 2.35 or newer (Ubuntu 22.04, Debian 12, Fedora 36) and a Vulkan driver. See [Linux](#linux) for what differs from the Mac app.
 
-On both systems the app updates itself: when a new version is downloaded, "Restart to update" appears in the title bar. Windows isn't supported.
+Install new Pi GPUI releases manually. The app still shows available updates for pi and its packages. Windows 11 x64 preview builds use a portable ZIP. See [Windows preview](docs/WINDOWS_PREVIEW.md).
 
 Needs pi 1.4 or newer within pi 1.x. The app finds pi in `PI_EXECUTABLE`, `PATH` or your login shell (so nvm installs work).
 
@@ -124,7 +124,7 @@ A theme is a JSON file in the `themes` folder next to `settings.json`; "New them
 
 ## Compatibility
 
-The app has its own version and supports a range of pi versions (`MIN_PI` and `TESTED_PI` in `src/pi.rs`). pi minors newer than the tested one still run, marked "not tested yet". Each release publishes `pi-compat.json`, and the updater only offers releases that support your pi. The app updates pi only when you click.
+The app has its own version and supports a range of pi versions (`MIN_PI` and `TESTED_PI` in `src/pi.rs`). pi minors newer than the tested one still run, marked "not tested yet". Each release publishes `pi-compat.json` so you can check compatibility before upgrading. The app updates pi only when you click.
 
 Tree navigation needs something pi's RPC lacks, so the app passes a small extension of its own (`extensions/pi-gpui-bridge.ts`) to the pi processes it starts. Nothing is installed.
 
@@ -133,7 +133,7 @@ Tree navigation needs something pi's RPC lacks, so the app passes a small extens
 The Linux app is the same code as the Mac app. What differs:
 
 - The window draws its own frame and buttons where the desktop lets it (GNOME, most Wayland compositors); otherwise the window manager's title bar is used.
-- There is no menu bar. Settings, Check for Updates and Quit are under `…` in the title bar.
+- There is no menu bar. Settings and Quit are under `…` in the title bar.
 - Shortcuts use `Ctrl` (see [Keys](#keys)); text fields follow the usual Linux keys (`Ctrl+←/→` by word, `Home`/`End`, `Ctrl+Backspace`).
 - Settings, projects and plugins live in `~/.config/pi-gpui` (or `$XDG_CONFIG_HOME/pi-gpui`).
 - Deleted sessions go to the Trash through `gio`, `kioclient` or `trash-put`; without any of them nothing is deleted.

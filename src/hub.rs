@@ -32,7 +32,6 @@ use crate::settings::{self, Settings};
 use crate::text_input::TextInput;
 use crate::ui::AnimationTicker;
 use crate::ui::prelude::*;
-use crate::updater::{AutoUpdater, UpdateStatus};
 
 actions!(
     hub,
@@ -77,39 +76,15 @@ const TRAFFIC_LIGHT_PADDING: f32 = 84.;
 
 pub fn bind_keys(cx: &mut App) {
     cx.bind_keys([
-        KeyBinding::new(
-            &crate::keys::binding("cmd-o"),
-            AddWorkspace,
-            Some(KEY_CONTEXT),
-        ),
-        KeyBinding::new(&crate::keys::binding("cmd-n"), NewChat, Some(KEY_CONTEXT)),
-        KeyBinding::new(&crate::keys::binding("cmd-w"), CloseChat, Some(KEY_CONTEXT)),
-        KeyBinding::new(
-            &crate::keys::binding("cmd-shift-e"),
-            ToggleDetails,
-            Some(KEY_CONTEXT),
-        ),
+        crate::keys::shortcut(cx, "cmd-o", AddWorkspace, Some(KEY_CONTEXT)),
+        crate::keys::shortcut(cx, "cmd-n", NewChat, Some(KEY_CONTEXT)),
+        crate::keys::shortcut(cx, "cmd-w", CloseChat, Some(KEY_CONTEXT)),
+        crate::keys::shortcut(cx, "cmd-shift-e", ToggleDetails, Some(KEY_CONTEXT)),
         KeyBinding::new("escape", CancelRename, Some(RENAME_CONTEXT)),
-        KeyBinding::new(
-            &crate::keys::binding("cmd-,"),
-            OpenSettings,
-            Some(KEY_CONTEXT),
-        ),
-        KeyBinding::new(
-            &crate::keys::binding("cmd-b"),
-            ToggleLeftDock,
-            Some(KEY_CONTEXT),
-        ),
-        KeyBinding::new(
-            &crate::keys::binding("cmd-r"),
-            ToggleRightDock,
-            Some(KEY_CONTEXT),
-        ),
-        KeyBinding::new(
-            &crate::keys::binding("cmd-shift-r"),
-            ReloadSessions,
-            Some(KEY_CONTEXT),
-        ),
+        crate::keys::shortcut(cx, "cmd-,", OpenSettings, Some(KEY_CONTEXT)),
+        crate::keys::shortcut(cx, "cmd-b", ToggleLeftDock, Some(KEY_CONTEXT)),
+        crate::keys::shortcut(cx, "cmd-r", ToggleRightDock, Some(KEY_CONTEXT)),
+        crate::keys::shortcut(cx, "cmd-shift-r", ReloadSessions, Some(KEY_CONTEXT)),
     ]);
     #[cfg(target_os = "macos")]
     cx.bind_keys([
@@ -118,13 +93,17 @@ pub fn bind_keys(cx: &mut App) {
     ]);
     #[cfg(not(target_os = "macos"))]
     cx.bind_keys([KeyBinding::new("f11", ToggleFullScreen, Some(KEY_CONTEXT))]);
-    cx.bind_keys((1..=9).map(|index| {
-        KeyBinding::new(
-            &crate::keys::binding(&format!("cmd-{index}")),
-            SelectSession { index },
-            Some(KEY_CONTEXT),
-        )
-    }));
+    let tab_keys: Vec<_> = (1..=9)
+        .map(|index| {
+            crate::keys::shortcut(
+                cx,
+                &format!("cmd-{index}"),
+                SelectSession { index },
+                Some(KEY_CONTEXT),
+            )
+        })
+        .collect();
+    cx.bind_keys(tab_keys);
 }
 
 enum InstallationState {
@@ -309,7 +288,7 @@ pub struct HubView {
     /// Workspaces whose hidden sessions are shown for now.
     show_hidden: HashSet<PathBuf>,
     session_menu: Option<SessionMenu>,
-    /// Linux has no menu bar: Settings, updates and Quit live in this menu,
+    /// Linux has no menu bar: Settings and Quit live in this menu,
     /// opened from the title bar. Holds where it opens.
     app_menu: Option<Point<Pixels>>,
     renaming: Option<Renaming>,
@@ -410,28 +389,6 @@ impl HubView {
             cx.observe(&plugins, |this, _, cx| {
                 // Plugins load after the window opens; their fields may be new.
                 this.ensure_plugin_fields(cx);
-                cx.notify();
-            }),
-            // The update chip lives in the title bar; manual checks report here.
-            cx.observe(&AutoUpdater::global(cx), |this, updater, cx| {
-                let result = updater.update(cx, |updater, _| updater.take_manual_result());
-                if let Some(result) = result {
-                    let current = updater.read(cx).current_version();
-                    this.notice = match result {
-                        UpdateStatus::UpToDate | UpdateStatus::Idle => Some((
-                            format!("Pi GPUI {current} is up to date."),
-                            Color::Default,
-                        )),
-                        UpdateStatus::Ready(version) => Some((
-                            format!("Pi GPUI {version} is ready: use \"Restart to update\" in the title bar."),
-                            Color::Default,
-                        )),
-                        UpdateStatus::Failed(error) => {
-                            Some((format!("Update failed: {error}"), Color::Warning))
-                        }
-                        UpdateStatus::Checking | UpdateStatus::Downloading(_) => None,
-                    };
-                }
                 cx.notify();
             }),
         ];
@@ -536,46 +493,7 @@ impl HubView {
             this.load_sessions(&path, cx);
         }
         this.check_installation(cx);
-        let updated_from =
-            AutoUpdater::global(cx).update(cx, |updater, _| updater.take_updated_from());
-        if let Some(previous) = updated_from {
-            this.notice = Some((
-                format!(
-                    "Updated to Pi GPUI {} (from {previous}).",
-                    env!("CARGO_PKG_VERSION")
-                ),
-                Color::Default,
-            ));
-        }
         this
-    }
-
-    fn restart_to_update(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let running = self
-            .workspaces
-            .iter()
-            .filter(|entry| entry.has_running_chat(cx))
-            .count();
-        let updater = AutoUpdater::global(cx);
-        if running == 0 {
-            updater.update(cx, |updater, cx| updater.restart_to_update(cx));
-            return;
-        }
-        let answer = window.prompt(
-            gpui::PromptLevel::Warning,
-            "pi is still working. Restart anyway?",
-            Some("Running work stops; the sessions themselves are saved."),
-            &["Restart", "Cancel"],
-            cx,
-        );
-        cx.spawn(async move |_, cx| {
-            if answer.await.ok() == Some(0) {
-                updater
-                    .update(cx, |updater, cx| updater.restart_to_update(cx))
-                    .ok();
-            }
-        })
-        .detach();
     }
 
     fn open_chats(&self) -> Vec<Entity<ChatView>> {
@@ -634,9 +552,6 @@ impl HubView {
                             "pi-gpui: reloading open sessions with pi {}",
                             installation.version
                         );
-                        let version = installation.version;
-                        AutoUpdater::global(cx)
-                            .update(cx, |updater, _| updater.set_pi_version(version));
                         this.installation = InstallationState::Ready(installation.clone());
                         let chats = this.open_chats();
                         for chat in &chats {
@@ -738,9 +653,6 @@ impl HubView {
                             installation.version,
                             installation.executable.display()
                         );
-                        let version = installation.version;
-                        AutoUpdater::global(cx)
-                            .update(cx, |updater, _| updater.set_pi_version(version));
                         this.installation = InstallationState::Ready(installation);
                         this.check_pi_updates(cx);
                         match this.pending_open.take() {
@@ -1261,8 +1173,6 @@ impl HubView {
                         return;
                     }
                 };
-                let version = installation.version;
-                AutoUpdater::global(cx).update(cx, |updater, _| updater.set_pi_version(version));
                 this.installation = InstallationState::Ready(installation.clone());
                 chat.update(cx, |chat, cx| chat.restart(installation, cx));
                 let info = this.session_info(&chat, cx);
@@ -1274,8 +1184,6 @@ impl HubView {
         .detach();
     }
 
-    /// `app.checkUpdates`: checks the app (and stages a newer release) and
-    /// pi with its packages, then answers with both.
     fn check_updates_for_plugin(&mut self, reply: PluginReply, cx: &mut Context<Self>) {
         let installation = match &self.installation {
             InstallationState::Ready(installation) => Some(installation.clone()),
@@ -1287,26 +1195,10 @@ impl HubView {
         let pi_check = cx.background_spawn(async move {
             installation.map(|installation| pi_updates::check(&installation))
         });
-        let updater = AutoUpdater::global(cx);
-        let current = updater.read(cx).current_version();
-        let app_check = updater.update(cx, |updater, cx| updater.check_and_wait(cx));
         cx.spawn(async move |this, cx| {
             let pi = pi_check.await;
-            let status = app_check.await.unwrap_or(UpdateStatus::Idle);
             this.update(cx, |this, cx| {
-                let mut app = json!({ "version": current.to_string() });
-                match status {
-                    UpdateStatus::Ready(version) => {
-                        app["status"] = json!("ready");
-                        app["available"] = json!(version.to_string());
-                    }
-                    UpdateStatus::Failed(error) => {
-                        app["status"] = json!("failed");
-                        app["error"] = json!(error);
-                    }
-                    _ => app["status"] = json!("upToDate"),
-                }
-                let mut result = json!({ "app": app });
+                let mut result = json!({ "app": { "version": env!("CARGO_PKG_VERSION"), "status": "disabled" } });
                 if let Some(updates) = pi {
                     result["pi"] = json!({
                         "version": pi_version.map(|version| version.to_string()),
@@ -1334,8 +1226,6 @@ impl HubView {
         .detach();
     }
 
-    /// `app.restart`: quits and starts the app again, applying a downloaded
-    /// update. Answers first, so the plugin can report it.
     fn restart_app_for_plugin(
         &mut self,
         params: &Value,
@@ -1354,14 +1244,9 @@ impl HubView {
             reply.finish(&self.plugins, Err(error), cx);
             return;
         }
-        let updater = AutoUpdater::global(cx);
-        let update = match updater.read(cx).status() {
-            UpdateStatus::Ready(version) => Some(version.to_string()),
-            _ => None,
-        };
         reply.finish(
             &self.plugins,
-            Ok(json!({ "restarting": true, "update": update })),
+            Ok(json!({ "restarting": true, "update": null })),
             cx,
         );
         cx.spawn(async move |_, cx| {
@@ -1369,7 +1254,7 @@ impl HubView {
             cx.background_executor()
                 .timer(std::time::Duration::from_millis(800))
                 .await;
-            updater.update(cx, |updater, cx| updater.restart(cx)).ok();
+            cx.update(|cx| cx.restart());
         })
         .detach();
     }
@@ -2102,13 +1987,6 @@ impl HubView {
                 this.open_settings(&OpenSettings, window, cx);
             },
         ));
-        let updates = item("app-menu-updates", "Check for Updates", None).on_click(cx.listener(
-            |this, _, _, cx| {
-                this.app_menu = None;
-                AutoUpdater::global(cx).update(cx, |updater, cx| updater.check(true, cx));
-                cx.notify();
-            },
-        ));
         let about = item("app-menu-about", "About Pi GPUI", None).on_click(cx.listener(
             |this, _, _, cx| {
                 this.app_menu = None;
@@ -2120,7 +1998,7 @@ impl HubView {
         deferred(
             anchored()
                 .position(position)
-                .anchor(gpui::Corner::TopRight)
+                .anchor(gpui::Anchor::TopRight)
                 .child(
                     v_flex()
                         .id("app-menu")
@@ -2137,7 +2015,6 @@ impl HubView {
                             cx.notify();
                         }))
                         .child(settings)
-                        .child(updates)
                         .child(about)
                         .child(div().my(px(4.)).h(px(1.)).bg(colors.border_variant))
                         .child(quit),
@@ -2775,7 +2652,7 @@ impl HubView {
             input.set_text(row.title.clone(), cx);
             input
         });
-        window.focus(&input.read(cx).focus_handle(cx));
+        window.focus(&input.read(cx).focus_handle(cx), cx);
         input.update(cx, |input, cx| input.select_all_text(cx));
         self.renaming = Some(Renaming { row, input });
         cx.notify();
@@ -3225,20 +3102,7 @@ impl HubView {
                 details = Some(format!("Found {}", installation.executable.display()));
             }
             pi::CheckError::Unsupported { installation } => {
-                actions = actions
-                    .child(
-                        Button::new("setup-app-update", "Check for Updates")
-                            .icon(IconName::Refresh)
-                            .style(ButtonStyle::Tinted(TintColor::Accent))
-                            .on_click(|_, _, cx| {
-                                AutoUpdater::global(cx)
-                                    .update(cx, |updater, cx| updater.check(true, cx))
-                            }),
-                    )
-                    .child(
-                        Button::new("setup-check-pi", "Check pi again")
-                            .on_click(cx.listener(|this, _, _, cx| this.check_installation(cx))),
-                    );
+                actions = actions.child(check_again);
                 details = Some(format!(
                     "Found pi {} at {}",
                     installation.version,
@@ -3329,7 +3193,7 @@ impl HubView {
             });
             self.ensure_plugin_fields(cx);
         }
-        window.focus(&self.focus_handle);
+        window.focus(&self.focus_handle, cx);
         cx.notify();
     }
 
@@ -4037,7 +3901,7 @@ impl HubView {
             )
             .when(untested, |this| {
                 this.tooltip(Tooltip::text(format!(
-                    "This app was tested with pi up to {}.{}.x. It should work; check for app updates.",
+                    "This app was tested with pi up to {}.{}.x. It should work.",
                     pi::TESTED_PI.major,
                     pi::TESTED_PI.minor
                 )))
@@ -4145,7 +4009,7 @@ impl HubView {
                     div().absolute().top_0().left_0().child(
                         deferred(
                             anchored()
-                                .anchor(gpui::Corner::BottomLeft)
+                                .anchor(gpui::Anchor::BottomLeft)
                                 .snap_to_window_with_margin(px(8.))
                                 .child(div().pb(px(6.)).child(content)),
                         )
@@ -4188,7 +4052,7 @@ impl HubView {
             ),
             pi_updates::PiCompatibility::Untested => (
                 format!(
-                    "Not tested with this app yet (tested up to {}.{}.x). It should work; if something breaks, check for app updates.",
+                    "Not tested with this app yet (tested up to {}.{}.x). It should work.",
                     pi::TESTED_PI.major,
                     pi::TESTED_PI.minor
                 ),
@@ -4197,7 +4061,7 @@ impl HubView {
             ),
             pi_updates::PiCompatibility::NeedsAppUpdate => (
                 format!(
-                    "This app supports pi {}.x. Update Pi GPUI first, or wait for a version that supports pi {}.",
+                    "This app supports pi {}.x. Install a Pi GPUI release that supports pi {} before updating pi.",
                     pi::MIN_PI.major,
                     latest.major
                 ),
@@ -4214,30 +4078,14 @@ impl HubView {
             .child(Label::new(format!("{current} → {latest}")).weight(FontWeight::MEDIUM))
             .child(Label::new(note).size(LabelSize::Small).color(color))
             .child(
-                h_flex()
-                    .gap(px(8.))
-                    .child(
-                        Button::new("run-pi-update", "Update pi")
-                            .style(ButtonStyle::Tinted(TintColor::Accent))
-                            .disabled(!allowed)
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.run_pi_update(
-                                    format!("Updating pi to {latest}"),
-                                    Vec::new(),
-                                    cx,
-                                )
-                            })),
-                    )
-                    .when(!allowed, |this| {
-                        this.child(
-                            Button::new("pi-update-app", "Check for app updates").on_click(
-                                |_, _, cx| {
-                                    AutoUpdater::global(cx)
-                                        .update(cx, |updater, cx| updater.check(true, cx))
-                                },
-                            ),
-                        )
-                    }),
+                h_flex().gap(px(8.)).child(
+                    Button::new("run-pi-update", "Update pi")
+                        .style(ButtonStyle::Tinted(TintColor::Accent))
+                        .disabled(!allowed)
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.run_pi_update(format!("Updating pi to {latest}"), Vec::new(), cx)
+                        })),
+                ),
             )
             .into_any_element()
     }
@@ -4496,7 +4344,6 @@ impl HubView {
                     .child(div().flex_1().min_w(px(0.)).flex().child(breadcrumb))
                     .children(plugin_statuses)
                     .children(status)
-                    .children(self.render_update_chip(cx))
                     .when(
                         !self.workspaces.iter().all(|entry| entry.chats.is_empty()),
                         |this| {
@@ -4587,33 +4434,6 @@ impl HubView {
         )
     }
 
-    /// Zed-style: quiet while downloading, a button once the update is ready.
-    fn render_update_chip(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        match AutoUpdater::global(cx).read(cx).status().clone() {
-            UpdateStatus::Downloading(version) => Some(
-                h_flex()
-                    .flex_none()
-                    .gap(px(6.))
-                    .child(Spinner::new().size(IconSize::XSmall).color(Color::Muted))
-                    .child(
-                        Label::new(format!("Downloading {version}"))
-                            .size(LabelSize::XSmall)
-                            .color(Color::Muted),
-                    )
-                    .into_any_element(),
-            ),
-            UpdateStatus::Ready(version) => Some(
-                Button::new("restart-to-update", "Restart to update")
-                    .icon(IconName::Refresh)
-                    .style(ButtonStyle::Tinted(TintColor::Accent))
-                    .tooltip(Tooltip::text(format!("Pi GPUI {version} is downloaded")))
-                    .on_click(cx.listener(|this, _, window, cx| this.restart_to_update(window, cx)))
-                    .into_any_element(),
-            ),
-            _ => None,
-        }
-    }
-
     fn render_placeholder(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let no_workspaces = self.workspaces.is_empty();
         v_flex()
@@ -4675,9 +4495,9 @@ impl Render for HubView {
         let corners = crate::window_frame::content_corners(window);
         if std::mem::take(&mut self.focus_active_chat) {
             match &self.active_chat {
-                Some(chat) => window.focus(&chat.read(cx).composer_focus_handle(cx)),
+                Some(chat) => window.focus(&chat.read(cx).composer_focus_handle(cx), cx),
                 // Keep hub shortcuts (⌘N, ⌘1…) working without a chat.
-                None => window.focus(&self.focus_handle),
+                None => window.focus(&self.focus_handle, cx),
             }
         }
 
@@ -4792,7 +4612,7 @@ impl Render for HubView {
                 } else {
                     modifiers.platform
                 };
-                let held = modifiers.secondary() && !modifiers.shift && !modifiers.alt && !other;
+                let held = modifiers.secondary(cx) && !modifiers.shift && !modifiers.alt && !other;
                 if held != this.command_held {
                     this.command_held = held;
                     cx.notify();

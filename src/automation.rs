@@ -83,7 +83,8 @@ async fn run(line: &str, window: AnyWindowHandle, cx: &mut AsyncApp) -> Result<(
     match name {
         "key" => {
             for keys in rest.split_whitespace() {
-                let keystroke = Keystroke::parse(keys).map_err(|error| error.to_string())?;
+                let keystroke = Keystroke::parse_with_os(keys, gpui::OperatingSystem::Mac)
+                    .map_err(|error| error.to_string())?;
                 dispatch_key(window, keystroke, cx).await?;
             }
         }

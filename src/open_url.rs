@@ -34,13 +34,11 @@ pub fn parse(url: &str) -> Option<OpenRequest> {
 }
 
 /// `pi-gpui://open?workspace=<dir>` for a project folder.
-/// Linux only: a second launch hands its folder to the running app.
+/// 第二次启动时需要无损转发含空格和中文的项目路径。
 #[cfg_attr(target_os = "macos", allow(dead_code))]
 pub fn workspace_link(workspace: &std::path::Path) -> String {
-    use std::os::unix::ffi::OsStrExt as _;
-
     let mut link = String::from("pi-gpui://open?workspace=");
-    for &byte in workspace.as_os_str().as_bytes() {
+    for &byte in workspace.to_string_lossy().as_bytes() {
         if byte.is_ascii_alphanumeric() || b"/-._~".contains(&byte) {
             link.push(byte as char);
         } else {
@@ -87,8 +85,10 @@ mod tests {
 
     #[test]
     fn workspace_links_round_trip() {
-        let link = workspace_link(std::path::Path::new("/home/me/my app+1"));
-        assert_eq!(parse(&link).unwrap().workspace, "/home/me/my app+1");
+        for path in ["/home/me/my app+1", r"C:\Users\me\我的项目 +1"] {
+            let link = workspace_link(std::path::Path::new(path));
+            assert_eq!(parse(&link).unwrap().workspace, path);
+        }
     }
 
     #[test]

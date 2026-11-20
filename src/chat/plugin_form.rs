@@ -117,12 +117,12 @@ impl FormState {
 
     /// Gives the keyboard to the highlighted row: the text field, or the
     /// card for an option.
-    pub(super) fn focus(&self, window: &mut Window, cx: &App) {
+    pub(super) fn focus(&self, window: &mut Window, cx: &mut App) {
         match &self.texts[self.step] {
             Some(input) if self.highlight >= self.question().options.len() => {
-                window.focus(&input.read(cx).focus_handle(cx));
+                window.focus(&input.read(cx).focus_handle(cx), cx);
             }
-            _ => window.focus(&self.focus),
+            _ => window.focus(&self.focus, cx),
         }
     }
 }
@@ -277,7 +277,7 @@ impl ChatView {
     ) {
         let modifiers = &event.keystroke.modifiers;
         let key = event.keystroke.key.as_str();
-        if modifiers.secondary() {
+        if modifiers.secondary(cx) {
             // Cmd/Ctrl+Enter goes on from anywhere in the card.
             if key == "enter" {
                 cx.stop_propagation();

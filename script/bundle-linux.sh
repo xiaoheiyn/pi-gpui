@@ -1,6 +1,6 @@
 #!/bin/sh
 # Builds the Linux release in target/release:
-#   pi-gpui.app/                       the install folder (the updater swaps it as a whole)
+#   pi-gpui.app/                       the install folder
 #     bin/pi-gpui
 #     share/applications/pi-gpui.desktop
 #     share/icons/hicolor/512x512/apps/pi-gpui.png

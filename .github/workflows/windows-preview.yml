@@ -1,0 +1,18 @@
+name: Windows x64 preview build
+
+on:
+  workflow_dispatch:
+
+jobs:
+  preview:
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup target add x86_64-pc-windows-msvc
+      - run: cargo test --locked --target x86_64-pc-windows-msvc
+      - run: ./script/bundle-windows.ps1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pi-gpui-windows-x64-preview
+          path: target/x86_64-pc-windows-msvc/release/Pi-GPUI-*-windows-x64.zip
+          if-no-files-found: error

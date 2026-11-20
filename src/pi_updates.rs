@@ -75,13 +75,9 @@ pub fn check(installation: &Installation) -> Updates {
 
 /// Runs `pi update <args>` and returns its output. Blocking.
 pub fn run(installation: &Installation, args: &[&str]) -> Result<String, String> {
-    let output = Command::new(&installation.executable)
+    let output = pi::pi_command(&installation.executable)
         .arg("update")
         .args(args)
-        .env(
-            "PATH",
-            pi::path_with_executable_dir(&installation.executable),
-        )
         .output()
         .map_err(|error| format!("could not run pi: {error}"))?;
     let text = format!(
@@ -104,12 +100,8 @@ pub fn run(installation: &Installation, args: &[&str]) -> Result<String, String>
 
 /// `(source, install path)` pairs from `pi list`.
 fn installed_packages(installation: &Installation) -> Vec<(String, PathBuf)> {
-    let Ok(output) = Command::new(&installation.executable)
+    let Ok(output) = pi::pi_command(&installation.executable)
         .arg("list")
-        .env(
-            "PATH",
-            pi::path_with_executable_dir(&installation.executable),
-        )
         .output()
     else {
         return Vec::new();

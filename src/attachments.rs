@@ -52,7 +52,12 @@ pub fn link_file(original: &Path) -> std::io::Result<PathBuf> {
         .join(unique_id());
     std::fs::create_dir_all(&directory)?;
     let link = directory.join(name);
+    #[cfg(unix)]
     std::os::unix::fs::symlink(original, &link)?;
+    #[cfg(windows)]
+    if std::fs::hard_link(original, &link).is_err() {
+        std::fs::copy(original, &link)?;
+    }
     Ok(link)
 }
 
@@ -62,14 +67,31 @@ pub fn link_file(original: &Path) -> std::io::Result<PathBuf> {
 pub fn save_clipboard_image(image: &gpui::Image) -> std::io::Result<PathBuf> {
     use gpui::ImageFormat;
     let extension = match image.format {
-        ImageFormat::Png | ImageFormat::Tiff | ImageFormat::Bmp => "png",
+        ImageFormat::Png => "png",
+        ImageFormat::Tiff => {
+            if cfg!(target_os = "macos") {
+                "png"
+            } else {
+                "tiff"
+            }
+        }
+        ImageFormat::Bmp => {
+            if cfg!(target_os = "macos") {
+                "png"
+            } else {
+                "bmp"
+            }
+        }
         ImageFormat::Jpeg => "jpg",
         ImageFormat::Webp => "webp",
         ImageFormat::Gif => "gif",
         ImageFormat::Svg => "svg",
+        ImageFormat::Ico => "ico",
+        ImageFormat::Pnm => "pnm",
     };
     let path = std::env::temp_dir().join(format!("pi-clipboard-{}.{extension}", unique_id()));
     match image.format {
+        #[cfg(target_os = "macos")]
         ImageFormat::Tiff | ImageFormat::Bmp => {
             let source = path.with_extension(if image.format == ImageFormat::Tiff {
                 "tiff"

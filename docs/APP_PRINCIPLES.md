@@ -57,7 +57,7 @@ untested(pi)  = (pi.major, pi.minor) > (TESTED_PI.major, TESTED_PI.minor)
 | 1.4.0 / 1.4 | 1.3.9 | Refused: update pi |
 | 1.4.0 / 1.4 | 1.4.7 | Supported |
 | 1.4.0 / 1.4 | 1.6.0 | Runs, marked "not tested yet" |
-| 1.4.0 / 1.4 | 2.0.0 | Refused: check for app updates |
+| 1.4.0 / 1.4 | 2.0.0 | Refused: install a compatible Pi GPUI release or use a supported pi version |
 
 This is common practice for clients of tools made by others (compare kubectl's version skew or the `engines` range of VS Code extensions): a new pi minor does not break the app, and the app version describes the app.
 
@@ -68,13 +68,13 @@ Connection check:
 3. Check the range above.
 4. Start RPC only for a supported pi. Check again every time a process is started.
 
-If the version cannot be read or parsed, the connection is refused. The app shows the executable path, the detected version or error, and what to do: update pi, or check for app updates.
+If the version cannot be read or parsed, the connection is refused. The app shows the executable path, the detected version or error, and what to do: update pi, or install a compatible version of Pi GPUI.
 
 Within the range, features that need something pi lacks are switched off one by one (feature detection), instead of refusing the whole connection.
 
 We never update pi without the user and never swap the executable.
 
-Each release publishes `pi-compat.json` (`pi-gpui --pi-compat`) with this range, so the updater only offers releases that support the installed pi. Raise `MIN_PI` only when the app needs something newer; raise `TESTED_PI` after testing a new pi minor.
+Each release publishes `pi-compat.json` (`pi-gpui --pi-compat`) with this range for users installing releases manually. Raise `MIN_PI` only when the app needs something newer; raise `TESTED_PI` after testing a new pi minor.
 
 ## 4. pi owns the agent and its data
 

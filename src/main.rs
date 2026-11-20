@@ -1,3 +1,8 @@
+#![cfg_attr(
+    all(target_os = "windows", not(debug_assertions)),
+    windows_subsystem = "windows"
+)]
+
 mod attachments;
 #[cfg(all(debug_assertions, target_os = "macos"))]
 mod automation;
@@ -22,7 +27,6 @@ mod settings;
 mod single_instance;
 mod text_input;
 mod ui;
-mod updater;
 mod window_frame;
 
 use std::path::PathBuf;
@@ -30,17 +34,14 @@ use std::path::PathBuf;
 use futures::StreamExt;
 
 use gpui::{
-    App, Application, Bounds, Focusable, KeyBinding, Menu, MenuItem, OsAction, SystemMenuType,
-    TitlebarOptions, WindowBounds, WindowOptions, actions, point, prelude::*, px, size,
+    App, Bounds, Focusable, Menu, MenuItem, OsAction, SystemMenuType, TitlebarOptions,
+    WindowBounds, WindowOptions, actions, point, prelude::*, px, size,
 };
 
 use crate::hub::HubView;
 use crate::ui::Assets;
 
-actions!(
-    app,
-    [Quit, CheckForUpdates, About, Hide, HideOthers, ShowAll]
-);
+actions!(app, [Quit, About, Hide, HideOthers, ShowAll]);
 
 fn main() {
     #[cfg(target_os = "macos")]
@@ -97,7 +98,7 @@ fn main() {
     if let Some(link) = &initial_link {
         url_sender.unbounded_send(vec![link.clone()]).ok();
     }
-    let app = Application::new().with_assets(Assets);
+    let app = gpui_platform::application().with_assets(Assets);
     app.on_open_urls(move |urls| {
         url_sender.unbounded_send(urls).ok();
     });
@@ -107,11 +108,11 @@ fn main() {
         chat::bind_keys(cx);
         file_tree::bind_keys(cx);
         hub::bind_keys(cx);
-        cx.bind_keys([KeyBinding::new(&crate::keys::binding("cmd-q"), Quit, None)]);
+        cx.bind_keys([crate::keys::shortcut(cx, "cmd-q", Quit, None)]);
         #[cfg(target_os = "macos")]
         cx.bind_keys([
-            KeyBinding::new("cmd-h", Hide, None),
-            KeyBinding::new("alt-cmd-h", HideOthers, None),
+            gpui::KeyBinding::new("cmd-h", Hide, None),
+            gpui::KeyBinding::new("alt-cmd-h", HideOthers, None),
         ]);
         cx.on_action(|_: &Hide, cx| cx.hide());
         cx.on_action(|_: &HideOthers, cx| cx.hide_other_apps());
@@ -120,13 +121,9 @@ fn main() {
             cx.open_url("https://github.com/bytesbay/pi-gpui");
         });
         cx.on_action(|_: &Quit, cx| cx.quit());
-        updater::AutoUpdater::init(cx);
         highlight::preload();
-        cx.on_action(|_: &CheckForUpdates, cx| {
-            updater::AutoUpdater::global(cx).update(cx, |updater, cx| updater.check(true, cx));
-        });
         cx.set_menus(app_menus());
-        cx.on_window_closed(|cx| {
+        cx.on_window_closed(|cx, _| {
             if cx.windows().is_empty() {
                 cx.quit();
             }
@@ -144,7 +141,7 @@ fn main() {
             }),
             // Linux: draw the frame ourselves where the compositor allows it
             // (window_frame.rs); app_id matches the .desktop file for the icon.
-            window_decorations: (!cfg!(target_os = "macos"))
+            window_decorations: cfg!(target_os = "linux")
                 .then_some(gpui::WindowDecorations::Client),
             app_id: Some("pi-gpui".into()),
             ..Default::default()
@@ -167,7 +164,7 @@ fn main() {
         #[cfg(not(all(debug_assertions, target_os = "macos")))]
         let activate = true;
         let focused = window.update(cx, |view, window, cx| {
-            window.focus(&view.focus_handle(cx));
+            window.focus(&view.focus_handle(cx), cx);
             if activate {
                 cx.activate(true);
             }
@@ -190,7 +187,7 @@ fn main() {
                 if opened.is_err() {
                     break;
                 }
-                cx.update(|cx| cx.activate(true)).ok();
+                cx.update(|cx| cx.activate(true));
             }
         })
         .detach();
@@ -218,10 +215,10 @@ fn app_menus() -> Vec<Menu> {
     use crate::text_input::{Copy, Cut, Paste, Redo, SelectAll, Undo};
     vec![
         Menu {
+            disabled: false,
             name: "Pi GPUI".into(),
             items: vec![
                 MenuItem::action("About Pi GPUI", About),
-                MenuItem::action("Check for Updates…", CheckForUpdates),
                 MenuItem::separator(),
                 MenuItem::action("Settings…", hub::OpenSettings),
                 MenuItem::separator(),
@@ -235,6 +232,7 @@ fn app_menus() -> Vec<Menu> {
             ],
         },
         Menu {
+            disabled: false,
             name: "File".into(),
             items: vec![
                 MenuItem::action("New Session", hub::NewChat),
@@ -244,6 +242,7 @@ fn app_menus() -> Vec<Menu> {
             ],
         },
         Menu {
+            disabled: false,
             name: "Edit".into(),
             items: vec![
                 MenuItem::os_action("Undo", Undo, OsAction::Undo),
@@ -256,6 +255,7 @@ fn app_menus() -> Vec<Menu> {
             ],
         },
         Menu {
+            disabled: false,
             name: "View".into(),
             items: vec![
                 MenuItem::action("Left Panel", hub::ToggleLeftDock),
@@ -271,6 +271,7 @@ fn app_menus() -> Vec<Menu> {
             ],
         },
         Menu {
+            disabled: false,
             name: "Window".into(),
             items: vec![
                 MenuItem::action("Minimize", hub::Minimize),

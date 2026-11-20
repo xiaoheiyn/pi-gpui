@@ -34,7 +34,7 @@ impl ChatView {
         };
         let load_file = *status != ToolStatus::Running && log.file.is_some();
         let focus = cx.focus_handle();
-        window.focus(&focus);
+        window.focus(&focus, cx);
         self.log_viewer = Some(LogViewer {
             row,
             lines: Vec::new(),
@@ -56,7 +56,7 @@ impl ChatView {
 
     pub(super) fn close_log(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.log_viewer.take().is_some() {
-            window.focus(&self.composer.read(cx).focus_handle(cx));
+            window.focus(&self.composer.read(cx).focus_handle(cx), cx);
             cx.notify();
         }
     }

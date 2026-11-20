@@ -20,7 +20,7 @@ use std::time::{Duration, Instant};
 use futures::StreamExt as _;
 use futures::channel::mpsc;
 use gpui::{
-    AnyElement, App, AsyncApp, Context, Corner, ElementId, Entity, EventEmitter, FocusHandle,
+    Anchor, AnyElement, App, AsyncApp, Context, ElementId, Entity, EventEmitter, FocusHandle,
     Focusable, FontWeight, Global, KeyBinding, ListAlignment, ListState, MouseButton, ScrollHandle,
     SharedString, Subscription, Task, WeakEntity, Window, actions, anchored, deferred, div, list,
     px,
@@ -94,53 +94,25 @@ pub fn bind_keys(cx: &mut App) {
     cx.bind_keys([
         KeyBinding::new("enter", Submit, Some(text_input::KEY_CONTEXT)),
         KeyBinding::new("escape", CancelRun, Some(KEY_CONTEXT)),
-        KeyBinding::new(
-            &crate::keys::binding("cmd-shift-m"),
-            ToggleModelPicker,
-            Some(KEY_CONTEXT),
-        ),
+        crate::keys::shortcut(cx, "cmd-shift-m", ToggleModelPicker, Some(KEY_CONTEXT)),
         // Text selected in the transcript; the composer has its own cmd-c.
-        KeyBinding::new(
-            &crate::keys::binding("cmd-c"),
-            CopySelection,
-            Some(KEY_CONTEXT),
-        ),
+        crate::keys::shortcut(cx, "cmd-c", CopySelection, Some(KEY_CONTEXT)),
         KeyBinding::new("escape", DismissModelPicker, Some(MODEL_PICKER_CONTEXT)),
-        KeyBinding::new(
-            &crate::keys::binding("cmd-shift-t"),
-            ToggleTree,
-            Some(KEY_CONTEXT),
-        ),
-        KeyBinding::new(
-            &crate::keys::binding("cmd-shift-c"),
-            Compact,
-            Some(KEY_CONTEXT),
-        ),
+        crate::keys::shortcut(cx, "cmd-shift-t", ToggleTree, Some(KEY_CONTEXT)),
+        crate::keys::shortcut(cx, "cmd-shift-c", Compact, Some(KEY_CONTEXT)),
         KeyBinding::new("up", TreeUp, Some(TREE_CONTEXT)),
         KeyBinding::new("k", TreeUp, Some(TREE_CONTEXT)),
         KeyBinding::new("down", TreeDown, Some(TREE_CONTEXT)),
         KeyBinding::new("j", TreeDown, Some(TREE_CONTEXT)),
-        KeyBinding::new(
-            &crate::keys::binding("cmd-up"),
-            TreeFirst,
-            Some(TREE_CONTEXT),
-        ),
+        crate::keys::shortcut(cx, "cmd-up", TreeFirst, Some(TREE_CONTEXT)),
         KeyBinding::new("home", TreeFirst, Some(TREE_CONTEXT)),
-        KeyBinding::new(
-            &crate::keys::binding("cmd-down"),
-            TreeLast,
-            Some(TREE_CONTEXT),
-        ),
+        crate::keys::shortcut(cx, "cmd-down", TreeLast, Some(TREE_CONTEXT)),
         KeyBinding::new("end", TreeLast, Some(TREE_CONTEXT)),
         KeyBinding::new("left", TreePreviousBranch, Some(TREE_CONTEXT)),
         KeyBinding::new("right", TreeNextBranch, Some(TREE_CONTEXT)),
         KeyBinding::new("enter", TreeGo, Some(TREE_CONTEXT)),
         KeyBinding::new("alt-enter", TreeGoWithSummary, Some(TREE_CONTEXT)),
-        KeyBinding::new(
-            &crate::keys::binding("cmd-enter"),
-            TreeFork,
-            Some(TREE_CONTEXT),
-        ),
+        crate::keys::shortcut(cx, "cmd-enter", TreeFork, Some(TREE_CONTEXT)),
         KeyBinding::new("escape", TreeClose, Some(TREE_CONTEXT)),
         KeyBinding::new("escape", LogClose, Some(log_viewer::LOG_CONTEXT)),
         KeyBinding::new("up", SlashUp, Some(SLASH_CONTEXT)),
@@ -1540,7 +1512,7 @@ impl ChatView {
             return;
         }
         let focus = cx.focus_handle();
-        window.focus(&focus);
+        window.focus(&focus, cx);
         self.tree = Some(TreeView {
             lines: None,
             selected: 0,
@@ -1554,7 +1526,7 @@ impl ChatView {
 
     fn close_tree(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.tree.take().is_some() {
-            window.focus(&self.composer.read(cx).focus_handle(cx));
+            window.focus(&self.composer.read(cx).focus_handle(cx), cx);
             cx.notify();
         }
     }
@@ -1883,7 +1855,7 @@ impl ChatView {
             }
             cx.notify();
         });
-        window.focus(&filter.read(cx).focus_handle(cx));
+        window.focus(&filter.read(cx).focus_handle(cx), cx);
         self.model_picker = Some(ModelPicker {
             filter,
             highlighted: self.current_model_index(cx).unwrap_or(0),
@@ -1911,7 +1883,7 @@ impl ChatView {
     fn close_model_picker(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.model_picker.take().is_some() {
             self.picker_closed_at = Some(Instant::now());
-            window.focus(&self.composer_focus_handle(cx));
+            window.focus(&self.composer_focus_handle(cx), cx);
             cx.notify();
         }
     }
@@ -2959,7 +2931,7 @@ impl ChatView {
                     div().absolute().top_0().left_0().child(
                         deferred(
                             anchored()
-                                .anchor(Corner::BottomLeft)
+                                .anchor(Anchor::BottomLeft)
                                 .snap_to_window_with_margin(px(8.))
                                 .child(picker),
                         )
@@ -3089,7 +3061,7 @@ impl ChatView {
                                     this.composer.update(cx, |composer, cx| {
                                         composer.attach_paths(&paths, cx)
                                     });
-                                    window.focus(&this.composer.read(cx).focus_handle(cx));
+                                    window.focus(&this.composer.read(cx).focus_handle(cx), cx);
                                 },
                             ))
                             .drag_over::<gpui::ExternalPaths>({
@@ -3108,7 +3080,7 @@ impl ChatView {
                             .bg(colors.panel_background)
                             .when(!ready, |this| this.opacity(0.6))
                             .on_mouse_down(MouseButton::Left, move |_, window, cx| {
-                                window.focus(&composer_focus);
+                                window.focus(&composer_focus, cx);
                                 cx.stop_propagation();
                             })
                             .child(self.composer.clone())
@@ -3289,8 +3261,8 @@ async fn pump_events(
     while let Some(first) = receiver.next().await {
         let mut batch = vec![first];
         while batch.len() < MAX_RECORDS_PER_UPDATE {
-            match receiver.try_next() {
-                Ok(Some(message)) => batch.push(message),
+            match receiver.try_recv() {
+                Ok(message) => batch.push(message),
                 _ => break,
             }
         }
@@ -3322,7 +3294,10 @@ fn format_time(at: i64, full: bool) -> String {
         // SAFETY: localtime_r only writes into the struct we pass.
         unsafe {
             let mut tm: libc::tm = std::mem::zeroed();
+            #[cfg(unix)]
             libc::localtime_r(&seconds, &mut tm);
+            #[cfg(windows)]
+            libc::localtime_s(&mut tm, &seconds);
             tm
         }
     };

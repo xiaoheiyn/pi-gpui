@@ -362,7 +362,7 @@ impl FilesPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        window.focus(&self.focus_handle);
+        window.focus(&self.focus_handle, cx);
         self.selected = Some(entry.path.clone());
         if entry.is_dir {
             let expanded = self.expanded.contains(&entry.path);
@@ -443,7 +443,7 @@ impl FilesPanel {
                         .on_mouse_down(
                             MouseButton::Right,
                             cx.listener(move |this, event: &MouseDownEvent, window, cx| {
-                                window.focus(&this.focus_handle);
+                                window.focus(&this.focus_handle, cx);
                                 this.selected = Some(menu_path.clone());
                                 this.menu = Some(FileMenu {
                                     path: menu_path.clone(),
@@ -607,7 +607,7 @@ impl Render for FilesPanel {
                 self.rows.len(),
                 cx.processor(|this, range, _, cx| this.render_rows(range, cx)),
             )
-            .track_scroll(self.scroll.clone())
+            .track_scroll(&self.scroll)
             .flex_1()
             .px(px(6.))
             .pb(px(10.))

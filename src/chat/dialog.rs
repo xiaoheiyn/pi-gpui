@@ -492,9 +492,9 @@ impl ChatView {
             return;
         }
         if self.dialog_takes_keys() {
-            window.focus(&self.focus_handle);
+            window.focus(&self.focus_handle, cx);
         } else {
-            window.focus(&self.composer.read(cx).focus_handle(cx));
+            window.focus(&self.composer.read(cx).focus_handle(cx), cx);
         }
     }
 

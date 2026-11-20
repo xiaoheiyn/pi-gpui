@@ -58,7 +58,7 @@ Later, plugins will be installable as pi packages (`pi install`): a plugin folde
 - `contributes.toolViews`: live views the plugin draws inside tool call rows. `tool` is the pi tool name, `width` and `height` the frame size (the view keeps that aspect ratio), `title` a name for placeholders.
 - `contributes.settings`: settings shown on the Settings page under the plugin's name (see Settings).
 - `activation`: `lazy` (default) starts the plugin on first use; `startup` starts it with the app, for plugins that serve something (a local server, a bridge).
-- `permissions`: `"sessions"` lets the plugin list, open and drive pi sessions and follow their events (see Sessions); `"app"` lets it check for updates and restart the app (see App). Without them `sessions.*` and `app.*` requests fail.
+- `permissions`: `"sessions"` lets the plugin list, open and drive pi sessions and follow their events (see Sessions); `"app"` lets it check pi and package updates and restart the app (see App). Without them `sessions.*` and `app.*` requests fail.
 
 ### Live views
 
@@ -222,8 +222,8 @@ With `"permissions": ["app"]`:
 
 | Method | Params | Result |
 |---|---|---|
-| `app.checkUpdates` | | `app`: `{version, status, available?, error?}` (`status` is `upToDate`, `ready` or `failed`; `ready` means `available` is downloaded); `pi`: `{version, available?}` and `packages`: `[{source, name, current, available}]` when pi is installed. Shows the result in the window like "Check for Updates…". A found release downloads before the answer |
-| `app.restart` | `force?` | `{restarting, update}`. Answers, then quits and starts the app again, installing a downloaded update (`update` is its version or `null`). Fails while pi works unless `force`. Plugins and session ids start over |
+| `app.checkUpdates` | | `app`: `{version, status: "disabled"}`. When compatible pi is installed, `pi` is `{version, available?}` and `packages` is `[{source, name, current, available}]`. The window uses the same pi and package results. |
+| `app.restart` | `force?` | `{restarting: true, update: null}`. Answers, then quits and starts the app again. Active work requires `force: true`. Plugins and session ids start over. |
 
 ### JavaScript example
 

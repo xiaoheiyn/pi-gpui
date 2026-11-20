@@ -17,6 +17,21 @@ pub fn binding(keys: &str) -> String {
     }
 }
 
+pub fn shortcut(
+    cx: &gpui::App,
+    keys: &str,
+    action: impl gpui::Action,
+    context: Option<&str>,
+) -> gpui::KeyBinding {
+    let context = context.map(|value| {
+        gpui::KeyBindingContextPredicate::parse(value)
+            .expect("valid built-in shortcut context")
+            .into()
+    });
+    gpui::KeyBinding::load(&binding(keys), Box::new(action), context, false, None, cx)
+        .unwrap_or_else(|error| panic!("invalid built-in shortcut {keys}: {error}"))
+}
+
 /// A shortcut label: `⌘⇧T` on macOS, `Ctrl+Shift+T` elsewhere.
 pub fn label(keys: &str) -> String {
     if cfg!(target_os = "macos") {

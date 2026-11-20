@@ -160,7 +160,7 @@ impl ChatView {
         }
         self.blur_plugin_view(cx);
         self.focused_view = Some((call_id.clone(), window.modifiers()));
-        window.focus(&self.view_focus);
+        window.focus(&self.view_focus, cx);
         self.plugins.update(cx, |registry, cx| {
             registry.send_view_input(&call_id, json!({ "focused": true }), cx)
         });
@@ -184,7 +184,7 @@ impl ChatView {
         cx: &mut Context<Self>,
     ) {
         self.blur_plugin_view(cx);
-        window.focus(&self.composer.read(cx).focus_handle(cx));
+        window.focus(&self.composer.read(cx).focus_handle(cx), cx);
     }
 
     /// A click elsewhere moved focus away: release the view. Called from render.

@@ -1,7 +1,7 @@
 #!/bin/sh
 # Publishes the version in Cargo.toml: tags it and pushes the tag. GitHub
 # Actions (.github/workflows/release.yml) builds the app and creates the
-# release; running apps on the same pi branch then offer "Restart to update".
+# release.
 #
 # Bump `version` in Cargo.toml first (semver of the app itself; supported pi
 # versions live in src/pi.rs), commit, then run this script.

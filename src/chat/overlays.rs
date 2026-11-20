@@ -504,7 +504,7 @@ impl ChatView {
                         div().absolute().top_0().left_0().child(
                             deferred(
                                 anchored()
-                                    .anchor(Corner::BottomLeft)
+                                    .anchor(Anchor::BottomLeft)
                                     .snap_to_window_with_margin(px(8.))
                                     .child(div().pb(px(6.)).child(popover)),
                             )

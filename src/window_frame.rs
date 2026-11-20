@@ -86,6 +86,7 @@ pub fn decorate(content: impl IntoElement, window: &mut Window, cx: &mut App) ->
                 })
                 .when(!tiling.is_tiled(), |this| {
                     this.shadow(vec![BoxShadow {
+                        inset: false,
                         color: Hsla {
                             h: 0.,
                             s: 0.,

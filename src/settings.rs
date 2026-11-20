@@ -258,9 +258,7 @@ pub fn init(cx: &mut App) {
     let watch = cx.spawn(async move |cx| {
         loop {
             cx.background_executor().timer(POLL_INTERVAL).await;
-            if cx.update(reload_if_changed).is_err() {
-                return;
-            }
+            cx.update(reload_if_changed);
         }
     });
     cx.set_global(SettingsFile {

@@ -40,14 +40,6 @@ impl Version {
                 })
             })
     }
-
-    pub fn app() -> Self {
-        Self {
-            major: env!("CARGO_PKG_VERSION_MAJOR").parse().unwrap_or(0),
-            minor: env!("CARGO_PKG_VERSION_MINOR").parse().unwrap_or(0),
-            patch: env!("CARGO_PKG_VERSION_PATCH").parse().unwrap_or(0),
-        }
-    }
 }
 
 impl fmt::Display for Version {
@@ -83,7 +75,7 @@ pub fn is_untested(pi: Version) -> bool {
 }
 
 /// The app's pi support as JSON, published next to each release so the
-/// updater can tell which release fits the installed pi.
+/// release metadata describes which installed pi versions are supported.
 pub fn compatibility_json() -> String {
     serde_json::json!({
         "app": env!("CARGO_PKG_VERSION"),
@@ -143,7 +135,7 @@ impl fmt::Display for CheckError {
             ),
             CheckError::Unsupported { installation } => write!(
                 formatter,
-                "Installed pi {} ({}) is a new major version: this app supports pi {}.x. Check for app updates.",
+                "Installed pi {} ({}) is a new major version: this app supports pi {}.x. Install a compatible Pi GPUI release or use a supported pi version.",
                 installation.version,
                 installation.executable.display(),
                 MIN_PI.major,
@@ -155,16 +147,11 @@ impl fmt::Display for CheckError {
 /// Finds pi, reads its version and checks that the app supports it.
 pub fn check_installation() -> Result<Installation, CheckError> {
     let executable = discover().ok_or(CheckError::NotFound)?;
-    let output = run_with_timeout(
-        Command::new(&executable)
-            .arg("--version")
-            .env("PATH", path_with_executable_dir(&executable)),
-        COMMAND_TIMEOUT,
-    )
-    .map_err(|details| CheckError::VersionUnreadable {
-        executable: executable.clone(),
-        details,
-    })?;
+    let output = run_with_timeout(pi_command(&executable).arg("--version"), COMMAND_TIMEOUT)
+        .map_err(|details| CheckError::VersionUnreadable {
+            executable: executable.clone(),
+            details,
+        })?;
 
     let version = Version::find_in(&output).ok_or_else(|| CheckError::VersionUnreadable {
         executable: executable.clone(),
@@ -195,42 +182,71 @@ fn discover() -> Option<PathBuf> {
 /// do not inherit PATH entries added by shell rc files (nvm, fnm, volta), so
 /// the shell lookup is what usually finds `pi` and `node`. Blocking.
 pub fn find_executable(name: &str) -> Option<PathBuf> {
-    if let Some(path) = std::env::var_os("PATH")
-        && let Some(found) = std::env::split_paths(&path)
+    let directories = std::env::var_os("PATH").unwrap_or_default();
+    #[cfg(target_os = "windows")]
+    {
+        let npm = std::env::var_os("APPDATA").map(|directory| PathBuf::from(directory).join("npm"));
+        std::env::split_paths(&directories)
+            .chain(npm)
+            .filter(|directory| directory.is_absolute())
+            .flat_map(|directory| {
+                [
+                    directory.join(format!("{name}.exe")),
+                    directory.join(format!("{name}.cmd")),
+                ]
+            })
+            .find(|path| path.is_file())
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        if let Some(found) = std::env::split_paths(&directories)
             .map(|directory| directory.join(name))
             .find(|candidate| candidate.is_file())
-    {
-        return Some(found);
-    }
+        {
+            return Some(found);
+        }
 
-    // `name` comes from our code or a plugin manifest: only plain names are looked up.
-    if !name
-        .chars()
-        .all(|character| character.is_ascii_alphanumeric() || "-_.".contains(character))
-    {
-        return None;
-    }
-    let shell = std::env::var_os("SHELL").unwrap_or_else(|| {
-        OsString::from(if cfg!(target_os = "macos") {
-            "/bin/zsh"
-        } else {
-            "/bin/bash"
-        })
-    });
-    let output = run_with_timeout(
-        Command::new(shell).args(["-ilc", &format!("command -v {name}")]),
-        COMMAND_TIMEOUT,
-    )
-    .ok()?;
+        // `name` comes from our code or a plugin manifest: only plain names are looked up.
+        if !name
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || "-_.".contains(character))
+        {
+            return None;
+        }
+        let shell = std::env::var_os("SHELL").unwrap_or_else(|| {
+            OsString::from(if cfg!(target_os = "macos") {
+                "/bin/zsh"
+            } else {
+                "/bin/bash"
+            })
+        });
+        let output = run_with_timeout(
+            Command::new(shell).args(["-ilc", &format!("command -v {name}")]),
+            COMMAND_TIMEOUT,
+        )
+        .ok()?;
 
-    // Interactive shells may print banners; the answer is the last absolute path.
-    output
-        .lines()
-        .rev()
-        .map(str::trim)
-        .find(|line| line.starts_with('/'))
-        .map(PathBuf::from)
-        .filter(|path| path.is_file())
+        // Interactive shells may print banners; the answer is the last absolute path.
+        output
+            .lines()
+            .rev()
+            .map(str::trim)
+            .find(|line| line.starts_with('/'))
+            .map(PathBuf::from)
+            .filter(|path| path.is_file())
+    }
+}
+
+pub fn pi_command(executable: &Path) -> Command {
+    let mut command = Command::new(executable);
+    command.env("PATH", path_with_executable_dir(executable));
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt as _;
+        use windows_sys::Win32::System::Threading::CREATE_NO_WINDOW;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+    command
 }
 
 /// pi is usually a `#!/usr/bin/env node` script, so the directory holding the
@@ -310,7 +326,7 @@ pub fn spawn_pi(
     session: Option<&Path>,
     extensions: &[PathBuf],
 ) -> std::io::Result<(JsonlProcess, mpsc::Receiver<JsonlMessage>)> {
-    let mut command = Command::new(&installation.executable);
+    let mut command = pi_command(&installation.executable);
     command.args(["--mode", "rpc"]);
     if let Some(bridge) = bridge_extension() {
         command.arg("--extension").arg(bridge);
@@ -322,9 +338,7 @@ pub fn spawn_pi(
     if let Some(session) = session {
         command.arg("--session").arg(session);
     }
-    command
-        .current_dir(workspace)
-        .env("PATH", path_with_executable_dir(&installation.executable));
+    command.current_dir(workspace);
     JsonlProcess::spawn(&mut command)
 }
 

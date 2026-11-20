@@ -291,14 +291,6 @@ impl SelectableText {
     }
 }
 
-impl IntoElement for SelectableText {
-    type Element = Self;
-
-    fn into_element(self) -> Self::Element {
-        self
-    }
-}
-
 pub struct PrepaintState {
     layout: Option<Rc<TextLayout>>,
     hitbox: Hitbox,
@@ -476,7 +468,7 @@ impl Element for SelectableText {
                         cx.notify();
                         selection.copy_focus.clone()
                     });
-                    window.focus(&focus);
+                    window.focus(&focus, cx);
                 } else {
                     // A click elsewhere ends this block's selection. If the click
                     // started a selection in another block, that block owns it now.

@@ -30,7 +30,7 @@ curl -fsSL https://pi-gpui.dev/install.sh | sh
 
 脚本把应用装到 `~/.local/pi-gpui.app`，不需要 root。支持 X11 和 Wayland，需要 glibc 2.35 或更高版本（Ubuntu 22.04、Debian 12、Fedora 36）和 Vulkan 驱动。Linux 上快捷键用 `Ctrl` 代替 `⌘`，设置在 `~/.config/pi-gpui`。目前只在 arm64 虚拟机里的 Ubuntu 24.04 上测试过，遇到问题请在 [#5](https://github.com/bytesbay/pi-gpui/issues/5) 反馈。
 
-两个系统上应用都会自动更新：新版本下载完成后，标题栏会出现 "Restart to update"。暂不支持 Windows。
+Pi GPUI 版本由用户手动安装。应用仍会显示 pi 和扩展的可用更新。Windows 11 x64 预览版采用便携 ZIP，参见 [Windows 预览版](WINDOWS_PREVIEW.md)。
 
 需要 pi 1.4 或更高的 1.x 版本。应用会在 `PI_EXECUTABLE`、`PATH` 或登录 shell 中查找 pi（所以 nvm 安装的 pi 也能找到）。
 

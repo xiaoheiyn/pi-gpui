@@ -199,7 +199,6 @@ struct Snapshot {
 
 /// Shaped text: one wrapped line per hard line. Shared with read-only
 /// selectable text in the transcript.
-#[derive(Clone)]
 pub(crate) struct TextLayout {
     pub(crate) lines: Vec<WrappedLine>,
     /// Byte offset where each hard line starts.
@@ -1403,14 +1402,6 @@ impl TextElement {
     }
 }
 
-impl IntoElement for TextElement {
-    type Element = Self;
-
-    fn into_element(self) -> Self::Element {
-        self
-    }
-}
-
 impl Element for TextElement {
     type RequestLayoutState = ();
     type PrepaintState = PrepaintState;
@@ -1685,7 +1676,7 @@ impl TextInput {
             gpui::deferred(
                 gpui::anchored()
                     .position(bounds.origin)
-                    .anchor(gpui::Corner::BottomLeft)
+                    .anchor(gpui::Anchor::BottomLeft)
                     .snap_to_window_with_margin(px(8.))
                     .child(
                         div()

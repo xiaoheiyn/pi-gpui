@@ -124,7 +124,7 @@ pub fn move_to_trash(path: &std::path::Path) -> Result<(), String> {
 /// `gio trash` (GLib, on GNOME and most other desktops), then `kioclient`
 /// (KDE), then `trash-put` (trash-cli). Never deletes for good: without any of
 /// them the file stays where it is.
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "linux")]
 pub fn move_to_trash(path: &std::path::Path) -> Result<(), String> {
     use std::process::Command;
 
@@ -155,7 +155,35 @@ pub fn move_to_trash(path: &std::path::Path) -> Result<(), String> {
     Err("no trash tool found (install gio, kioclient or trash-cli)".to_string())
 }
 
+#[cfg(windows)]
+pub fn move_to_trash(_: &std::path::Path) -> Result<(), String> {
+    // ADR-shortcut: Windows 预览先从资源管理器手动移入回收站，支持系统回收接口后再启用。
+    Err("Use File Explorer to move the file to the Recycle Bin.".into())
+}
+
+#[cfg(windows)]
+pub fn reveal_in_file_manager(path: &std::path::Path) {
+    use std::os::windows::process::CommandExt as _;
+    let mut argument = std::ffi::OsString::from("/select,\"");
+    argument.push(path);
+    argument.push("\"");
+    if let Err(error) = std::process::Command::new("explorer.exe")
+        .raw_arg(argument)
+        .spawn()
+    {
+        eprintln!("pi-gpui: could not reveal {}: {error}", path.display());
+    }
+}
+
+#[cfg(windows)]
+pub fn open_in_editor(path: &std::path::Path) {
+    if let Err(error) = std::process::Command::new("notepad.exe").arg(path).spawn() {
+        eprintln!("pi-gpui: could not open {}: {error}", path.display());
+    }
+}
+
 /// Shows the file in Finder, or in the file manager on Linux.
+#[cfg(unix)]
 pub fn reveal_in_file_manager(path: &std::path::Path) {
     use std::process::Command;
 
@@ -193,6 +221,7 @@ pub fn reveal_in_file_manager(path: &std::path::Path) {
 }
 
 /// Opens a file in Zed when it is installed, otherwise in the default editor.
+#[cfg(unix)]
 pub fn open_in_editor(path: &std::path::Path) {
     use std::process::Command;
 
@@ -220,6 +249,7 @@ pub fn open_in_editor(path: &std::path::Path) {
     }
 }
 
+#[cfg(unix)]
 fn on_path(program: &str) -> bool {
     std::env::var_os("PATH").is_some_and(|paths| {
         std::env::split_paths(&paths).any(|directory| directory.join(program).is_file())
@@ -227,6 +257,7 @@ fn on_path(program: &str) -> bool {
 }
 
 /// `file://` URI with the bytes that need it percent-encoded.
+#[cfg(unix)]
 fn file_uri(path: &std::path::Path) -> String {
     use std::os::unix::ffi::OsStrExt as _;
 

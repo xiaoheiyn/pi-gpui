@@ -7,6 +7,7 @@ use std::collections::HashSet;
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
+#[cfg(unix)]
 use std::process::{Command, Stdio};
 use std::time::{Duration, SystemTime};
 
@@ -49,7 +50,7 @@ pub fn list_sessions(workspace: &Path, limit: usize) -> Vec<SessionSummary> {
             }
         }
     }
-    candidates.sort_by(|left, right| right.1.cmp(&left.1));
+    candidates.sort_by_key(|candidate| std::cmp::Reverse(candidate.1));
 
     candidates
         .into_iter()
@@ -181,6 +182,7 @@ pub fn foreign_lease_holder(session: &Path) -> Option<String> {
     )
 }
 
+#[cfg(unix)]
 fn process_is_alive(pid: u64) -> bool {
     Command::new("kill")
         .args(["-0", &pid.to_string()])
@@ -188,6 +190,29 @@ fn process_is_alive(pid: u64) -> bool {
         .stderr(Stdio::null())
         .status()
         .is_ok_and(|status| status.success())
+}
+
+#[cfg(windows)]
+fn process_is_alive(pid: u64) -> bool {
+    use windows_sys::Win32::Foundation::{
+        CloseHandle, ERROR_INVALID_PARAMETER, GetLastError, WAIT_OBJECT_0,
+    };
+    use windows_sys::Win32::System::Threading::{
+        OpenProcess, PROCESS_SYNCHRONIZE, WaitForSingleObject,
+    };
+    let Ok(pid) = u32::try_from(pid) else {
+        return false;
+    };
+    // SAFETY: 只申请等待权限，成功后归还句柄，拒绝访问时保留租约。
+    unsafe {
+        let handle = OpenProcess(PROCESS_SYNCHRONIZE, 0, pid);
+        if handle.is_null() {
+            return GetLastError() != ERROR_INVALID_PARAMETER;
+        }
+        let running = WaitForSingleObject(handle, 0) != WAIT_OBJECT_0;
+        CloseHandle(handle);
+        running
+    }
 }
 
 pub fn message_text(message: &Value) -> String {
@@ -238,7 +263,15 @@ pub fn display_path(path: &Path) -> String {
 }
 
 pub fn home_directory() -> Option<PathBuf> {
-    std::env::var_os("HOME").map(PathBuf::from)
+    std::env::var_os("HOME")
+        .or_else(|| {
+            if cfg!(windows) {
+                std::env::var_os("USERPROFILE")
+            } else {
+                None
+            }
+        })
+        .map(PathBuf::from)
 }
 
 /// The app's own files (settings, projects, plugins): `~/Library/Application
@@ -248,16 +281,10 @@ pub fn app_data_directory() -> Option<PathBuf> {
     if cfg!(target_os = "macos") {
         return Some(home_directory()?.join("Library/Application Support/pi-gpui"));
     }
-    Some(xdg_directory("XDG_CONFIG_HOME", ".config")?.join("pi-gpui"))
-}
-
-/// Downloads that can be thrown away: `~/Library/Caches/pi-gpui` on macOS,
-/// `$XDG_CACHE_HOME/pi-gpui` (`~/.cache/pi-gpui`) elsewhere.
-pub fn app_cache_directory() -> Option<PathBuf> {
-    if cfg!(target_os = "macos") {
-        return Some(home_directory()?.join("Library/Caches/pi-gpui"));
+    if cfg!(windows) {
+        return Some(PathBuf::from(std::env::var_os("LOCALAPPDATA")?).join("pi-gpui"));
     }
-    Some(xdg_directory("XDG_CACHE_HOME", ".cache")?.join("pi-gpui"))
+    Some(xdg_directory("XDG_CONFIG_HOME", ".config")?.join("pi-gpui"))
 }
 
 /// An XDG base directory; relative values are ignored, as the spec says.

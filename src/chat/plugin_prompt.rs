@@ -112,7 +112,7 @@ impl ChatView {
             return;
         }
         match self.prompt_fields.last().map(|field| &field.body) {
-            Some(PromptBody::Input(input)) => window.focus(&input.read(cx).focus_handle(cx)),
+            Some(PromptBody::Input(input)) => window.focus(&input.read(cx).focus_handle(cx), cx),
             Some(PromptBody::Form(state)) => state.focus(window, cx),
             None => {}
         }
@@ -180,7 +180,7 @@ impl ChatView {
         self.plugins.update(cx, |registry, cx| {
             registry.answer_prompt(&id.0, &id.1, answer, cx)
         });
-        window.focus(&self.composer.read(cx).focus_handle(cx));
+        window.focus(&self.composer.read(cx).focus_handle(cx), cx);
     }
 
     fn toggle_prompt_mask(&mut self, id: &(SharedString, SharedString), cx: &mut Context<Self>) {

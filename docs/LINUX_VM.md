@@ -35,7 +35,7 @@ For Wayland checks, run a nested Weston inside the session (`weston --width 1600
 
 The port runs on X11 (GNOME) and on Wayland (nested Weston): the window frame, moving and resizing, the folder picker, sending messages to pi, the session tree, the Files panel, clipboard text and images, the Trash, "Show in File Manager", `pi-gpui://` links, the installer (`site/install.sh` with `PI_GPUI_ARCHIVE=<tarball>`) and a launch from the desktop entry with a bare environment.
 
-Not checked here: real GPU drivers (the VM renders with llvmpipe, so speed says nothing), x86_64, KDE and tiling compositors, input methods, and the updater against a real Linux release.
+Not checked here: real GPU drivers (the VM renders with llvmpipe, so speed says nothing), x86_64, KDE and tiling compositors, input methods.
 
 Notes for driving the app:
 

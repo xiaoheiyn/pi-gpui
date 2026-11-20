@@ -14,8 +14,8 @@ use futures::channel::{mpsc, oneshot};
 use futures::future::Shared;
 use futures::{FutureExt as _, StreamExt as _};
 use gpui::{
-    AppContext as _, AsyncApp, Context, Entity, EventEmitter, KeyBinding, Keystroke, SharedString,
-    Task, WeakEntity,
+    AppContext as _, AsyncApp, Context, Entity, EventEmitter, Keystroke, SharedString, Task,
+    WeakEntity,
 };
 use serde_json::{Value, json};
 
@@ -187,7 +187,7 @@ struct Plugin {
     startup: bool,
     /// `"permissions": ["sessions"]`: may read and drive pi sessions.
     sessions: bool,
-    /// `"permissions": ["app"]`: may check for updates and restart the app.
+    /// `"permissions": ["app"]`: may check pi and package updates and restart the app.
     app: bool,
     state: PluginState,
     /// Messages for the plugin while its process is starting.
@@ -295,8 +295,9 @@ impl PluginRegistry {
             }
             for command in &parsed.commands {
                 if let Some(keys) = &command.keybinding {
-                    bindings.push(KeyBinding::new(
-                        &crate::keys::binding(keys),
+                    bindings.push(crate::keys::shortcut(
+                        cx,
+                        keys,
                         RunPluginCommand {
                             command: command.id.clone(),
                         },
@@ -835,7 +836,7 @@ impl PluginRegistry {
         };
         let mut pixels = decoded.into_rgba8();
         // GPUI textures are BGRA.
-        for pixel in pixels.chunks_exact_mut(4) {
+        for pixel in pixels.as_chunks_mut::<4>().0 {
             pixel.swap(0, 2);
         }
         let frame = Arc::new(gpui::RenderImage::new(vec![image::Frame::new(pixels)]));
@@ -1157,8 +1158,8 @@ async fn pump_plugin(
     while let Some(first) = receiver.next().await {
         let mut batch = vec![first];
         while batch.len() < MAX_MESSAGES_PER_UPDATE {
-            match receiver.try_next() {
-                Ok(Some(message)) => batch.push(message),
+            match receiver.try_recv() {
+                Ok(message) => batch.push(message),
                 _ => break,
             }
         }
@@ -1279,8 +1280,17 @@ fn parse_manifest(directory: &Path) -> Result<ParsedManifest, String> {
         let keybinding = match command["keybinding"].as_str() {
             Some(keys) => {
                 for keystroke in keys.split_whitespace() {
-                    Keystroke::parse(keystroke)
-                        .map_err(|_| format!("invalid keybinding \"{keys}\""))?;
+                    Keystroke::parse_with_os(
+                        &crate::keys::binding(keystroke),
+                        if cfg!(target_os = "macos") {
+                            gpui::OperatingSystem::Mac
+                        } else if cfg!(target_os = "windows") {
+                            gpui::OperatingSystem::Windows
+                        } else {
+                            gpui::OperatingSystem::Linux
+                        },
+                    )
+                    .map_err(|_| format!("invalid keybinding \"{keys}\""))?;
                 }
                 Some(SharedString::from(keys.to_string()))
             }
