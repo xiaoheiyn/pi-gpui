@@ -1,5 +1,7 @@
 # Notes for coding agents
 
+**Scratch artifacts**: Informal deliverables generated during the course of a task (such as ad-hoc tests, research notes, or debugging output) should be stored in the repository’s root directory under `.scratch/<feature-slug>/`, organized and named according to the specific task.
+
 ## Commit messages
 
 Release notes and the changelog are generated from commit subjects, so every
@@ -41,3 +43,17 @@ in the body: `feat(plugins)!: rename sessions.reload to sessions.refresh`.
 
 Releases: bump `version` in `Cargo.toml`, commit it as `chore: release X.Y.Z`,
 then run `script/release.sh`.
+
+## Agent skills
+
+### Issue tracker
+
+Issues and specs live as markdown files under `.scratch/<feature-slug>/`. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Five canonical roles, each string equal to its name (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`). See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: one `GLOSSARY.md` and `docs/adr/` at the repo root. See `docs/agents/domain.md`.
