@@ -941,7 +941,12 @@ impl ChatView {
                     &record["partialResult"]
                 };
                 if let Some(call) = record["toolCallId"].as_str() {
-                    self.children.result(call, result, finished);
+                    let phase = if finished {
+                        children::ResultPhase::Finished
+                    } else {
+                        children::ResultPhase::Progress
+                    };
+                    self.children.result(call, result, phase);
                 }
                 let index = record["toolCallId"]
                     .as_str()

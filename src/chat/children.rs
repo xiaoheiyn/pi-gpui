@@ -24,12 +24,19 @@ struct Child {
     file: Option<PathBuf>,
 }
 
+struct PendingInspection {
+    child: usize,
+    request: String,
+    rpc: String,
+}
+
 #[derive(Default)]
 pub(super) struct Children {
     calls: HashMap<String, Value>,
     jobs: HashMap<String, String>,
+    running_jobs: std::collections::HashSet<String>,
     snapshot: Option<Value>,
-    inspection: Option<(usize, String, String)>,
+    inspection: Option<PendingInspection>,
     next_inspection: u64,
     children: Vec<Child>,
     active: Option<usize>,
@@ -37,12 +44,19 @@ pub(super) struct Children {
     read: Option<Task<()>>,
 }
 
+#[derive(Clone, Copy)]
+pub(super) enum ResultPhase {
+    Progress,
+    Finished,
+}
+
 impl Children {
     pub(super) fn start(&mut self, call: &str, args: &Value) {
         self.calls.insert(call.into(), args.clone());
     }
 
-    pub(super) fn result(&mut self, call: &str, result: &Value, finished: bool) {
+    pub(super) fn result(&mut self, call: &str, result: &Value, phase: ResultPhase) {
+        let finished = matches!(phase, ResultPhase::Finished);
         let Some(args) = self.calls.get(call).cloned() else {
             return;
         };
@@ -61,8 +75,33 @@ impl Children {
             }
             return;
         };
+        let inventory = &details["workflowChildren"];
+        if inventory["version"] == 1 && inventory["workflowRunId"] == run {
+            for row in inventory["children"].as_array().into_iter().flatten() {
+                let Some(id) = row["childId"].as_str() else {
+                    continue;
+                };
+                if row["state"] == "pending" {
+                    continue;
+                }
+                let name = row["agent"].as_str().unwrap_or(id);
+                let child = self.child(call, run, id, name, "");
+                child.name = name.into();
+                child.running = !terminal(&row["state"]);
+                if let Some(file) = row["sessionFile"].as_str() {
+                    child.file = Some(file.into());
+                }
+                if let Some(tool) = row["activity"]["currentTool"].as_str() {
+                    child.receipt = Arc::from(format!("Running {tool}…"));
+                }
+            }
+        }
         if let Some(job) = details["asyncId"].as_str() {
-            self.jobs.insert(job.into(), call.into());
+            let owner = self.jobs.entry(job.into()).or_insert_with(|| call.into());
+            if owner != call {
+                return;
+            }
+            self.running_jobs.insert(job.into());
             if let Some(agent) = args["agent"].as_str() {
                 let child = self.child(
                     call,
@@ -98,7 +137,9 @@ impl Children {
                         .filter(|task| *task != "[prompt redacted]")
                 })
                 .unwrap_or_default();
-            let child = self.child(call, run, &index.to_string(), agent, task);
+            let index_id = index.to_string();
+            let child_id = row["workflowKey"].as_str().unwrap_or(&index_id);
+            let child = self.child(call, run, child_id, agent, task);
             child.running =
                 !finished && !terminal(&row["status"]) && !terminal(&row["progress"]["status"]);
             if let Some(file) = row["sessionFile"]
@@ -183,7 +224,7 @@ impl Children {
                 }
                 Some("toolResult") => {
                     if let Some(id) = message["toolCallId"].as_str() {
-                        self.result(id, message, true);
+                        self.result(id, message, ResultPhase::Finished);
                     }
                 }
                 Some("custom") => self.notice(message),
@@ -229,6 +270,9 @@ impl Children {
             let Some(call) = self.jobs.get(run_id).cloned() else {
                 continue;
             };
+            if terminal(&run["state"]) {
+                self.running_jobs.remove(run_id);
+            }
             if self.children.iter().any(|child| {
                 child.key.call == call && child.key.run == run_id && child.key.child == run_id
             }) {
@@ -242,7 +286,10 @@ impl Children {
     fn async_row(&mut self, call: &str, run: &str, row: &Value) {
         let Some(id) = row["id"].as_str() else { return };
         let Some(children) = row["children"].as_array().filter(|items| !items.is_empty()) else {
-            self.apply_async_child(call, run, id, row);
+            // 顶层工作流可能先到，子任务列表随后才出现。
+            if id != run || row["kind"] == "single" {
+                self.apply_async_child(call, run, id, row);
+            }
             return;
         };
         for child in children.iter().filter(|child| child["kind"] != "host-step") {
@@ -270,7 +317,7 @@ impl Children {
     }
 
     pub(super) fn inspection_reply(&mut self, record: &Value) {
-        let Some((index, request, _)) = &self.inspection else {
+        let Some(inspection) = &self.inspection else {
             return;
         };
         let Some(payload) = record["widgetLines"].as_array().and_then(|lines| {
@@ -289,11 +336,18 @@ impl Children {
         };
         if reply["kind"] != "pi-subagents.inspect-reply"
             || reply["version"] != 1
-            || reply["requestId"].as_str() != Some(request)
+            || reply["requestId"].as_str() != Some(&inspection.request)
         {
             return;
         }
-        let child = &mut self.children[*index];
+        let Some(inspection) = self.inspection.take() else {
+            return;
+        };
+        // 旧页面的回包可以晚于切页，不能写入当前记录。
+        if self.active != Some(inspection.child) {
+            return;
+        }
+        let child = &mut self.children[inspection.child];
         if let Some(task) = reply["task"].as_str()
             && child.task.is_empty()
         {
@@ -323,12 +377,11 @@ impl Children {
         } else {
             Some(text)
         };
-        self.inspection = None;
     }
 
     pub(super) fn is_inspection_response(&mut self, record: &Value) -> bool {
-        if let Some((_, _, rpc)) = &self.inspection
-            && record["id"].as_str() == Some(rpc)
+        if let Some(inspection) = &self.inspection
+            && record["id"].as_str() == Some(&inspection.rpc)
         {
             if record["success"] != true {
                 self.inspection = None;
@@ -351,6 +404,7 @@ impl Children {
             let Some(call) = self.jobs.get(id).cloned() else {
                 continue;
             };
+            self.running_jobs.remove(id);
             if let Some(items) = run["childRuns"]
                 .as_array()
                 .filter(|items| !items.is_empty())
@@ -368,7 +422,9 @@ impl Children {
                         "",
                     );
                     child.receipt = receipt.clone();
-                    child.file = item["sessionFile"].as_str().map(PathBuf::from);
+                    if let Some(file) = item["sessionFile"].as_str() {
+                        child.file = Some(file.into());
+                    }
                 }
             } else {
                 let child = self.child(
@@ -409,7 +465,7 @@ impl Children {
     }
 
     pub(super) fn any_running(&self) -> bool {
-        self.children.iter().any(|child| child.running)
+        !self.running_jobs.is_empty() || self.children.iter().any(|child| child.running)
     }
 }
 
@@ -430,6 +486,8 @@ fn terminal(state: &Value) -> bool {
                 | "timed-out"
                 | "paused"
                 | "timeout"
+                | "rejected"
+                | "detached"
         )
     )
 }
@@ -595,7 +653,11 @@ impl ChatView {
             key.run
         );
         if let Ok(rpc) = self.send(json!({"type":"prompt", "message":message})) {
-            self.children.inspection = Some((index, request, rpc));
+            self.children.inspection = Some(PendingInspection {
+                child: index,
+                request,
+                rpc,
+            });
         }
     }
 
@@ -693,6 +755,67 @@ fn read_record(parent: &Path, file: &Path) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn queued_background_workflow_does_not_replace_its_eventual_children() {
+        let mut children = Children::default();
+        children.start("call", &json!({"workflow":"fruit","async":true}));
+        children.result(
+            "call",
+            &json!({"details":{"runId":"job","asyncId":"job"}}),
+            ResultPhase::Finished,
+        );
+        let snapshot = |nodes| json!({"runs":[{"id":"job","kind":"workflow","state":"running","children":nodes}]});
+        children.apply_snapshot(&snapshot(json!([])));
+        assert!(children.any_running());
+        assert!(children.children.is_empty());
+        children.apply_snapshot(&snapshot(json!([
+            {"id":"apple","kind":"step","label":"worker","state":"running"},
+            {"id":"pear","kind":"step","label":"worker","state":"running"}
+        ])));
+        assert_eq!(children.children.len(), 2);
+        assert_eq!(children.children[1].key.child, "pear");
+    }
+
+    #[test]
+    fn workflow_progress_and_final_results_keep_the_same_child_records() {
+        let mut children = Children::default();
+        children.start("call", &json!({"workflow":"fruit"}));
+        let progress = json!({"details":{"runId":"run","workflowChildren":{
+            "version":1,"workflowRunId":"run","children":[
+                {"childId":"apple","agent":"worker","state":"running","sessionFile":"/tmp/apples.jsonl"},
+                {"childId":"pear","agent":"worker","state":"running"}]}}});
+        children.result("call", &progress, ResultPhase::Progress);
+        assert_eq!(children.children.len(), 2);
+        assert!(children.children[0].running);
+        let result = json!({"details":{"runId":"run","results":[
+            {"workflowKey":"pear","index":0,"agent":"worker","task":"Pears","finalOutput":"Found pears"},
+            {"workflowKey":"apple","index":0,"agent":"worker","task":"Apples","finalOutput":"Found apples"}]}});
+        children.result("call", &result, ResultPhase::Finished);
+        assert_eq!(children.children.len(), 2);
+        assert_eq!(children.children[0].receipt.as_ref(), "Found apples");
+        assert_eq!(children.children[1].receipt.as_ref(), "Found pears");
+        assert!(!children.any_running());
+    }
+
+    #[test]
+    fn delayed_inspection_reply_cannot_overwrite_another_open_child() {
+        let mut children = Children::default();
+        children.child("a", "run-a", "run-a", "worker", "Apples");
+        children.child("b", "run-b", "run-b", "worker", "Pears");
+        children.active = Some(1);
+        children.detail = Some("Pears only".into());
+        children.inspection = Some(PendingInspection {
+            child: 0,
+            request: "a".into(),
+            rpc: "ui-1".into(),
+        });
+        let reply = json!({"kind":"pi-subagents.inspect-reply","version":1,"requestId":"a","finalOutput":"Apples only"});
+        children.inspection_reply(
+            &json!({"widgetLines":[format!("PI_SUBAGENT_INSPECT_JSON:{reply}")]}),
+        );
+        assert_eq!(children.detail.as_deref(), Some("Pears only"));
+    }
 
     #[test]
     fn reopening_disambiguates_same_named_workers_and_keeps_each_receipt() {
