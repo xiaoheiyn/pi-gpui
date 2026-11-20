@@ -1235,7 +1235,10 @@ impl HubView {
         let running = self
             .open_chats()
             .iter()
-            .filter(|chat| chat.read(cx).is_running())
+            .filter(|chat| {
+                let chat = chat.read(cx);
+                chat.is_running() || chat.has_running_children()
+            })
             .count();
         if running > 0 && params["force"].as_bool() != Some(true) {
             let error = format!(

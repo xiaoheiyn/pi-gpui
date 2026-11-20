@@ -1,5 +1,6 @@
 //! One pi session: transcript, composer and its own `pi --mode rpc` process.
 
+mod children;
 mod dialog;
 mod log_viewer;
 mod overlays;
@@ -287,6 +288,7 @@ enum Row {
         thought_overrides: BTreeMap<usize, bool>,
     },
     Tool {
+        child_call: Option<String>,
         name: String,
         detail: String,
         status: ToolStatus,
@@ -367,6 +369,7 @@ pub struct ChatView {
     compacting: bool,
     tree: Option<TreeView>,
     /// The full output of one tool call (the row's log button).
+    children: children::Children,
     log_viewer: Option<log_viewer::LogViewer>,
     /// The tool call the log viewer shows just ended: load its full log.
     log_finished: Option<usize>,
@@ -498,6 +501,7 @@ impl ChatView {
             slash_scroll: ScrollHandle::new(),
             compacting: false,
             tree: None,
+            children: children::Children::default(),
             log_viewer: None,
             log_finished: None,
             navigating: None,
@@ -595,6 +599,10 @@ impl ChatView {
     }
 
     /// True from the moment a prompt is sent, so the sidebar reacts immediately.
+    pub fn has_running_children(&self) -> bool {
+        self.children.any_running()
+    }
+
     pub fn is_running(&self) -> bool {
         self.running || self.pending_prompt
     }
@@ -637,6 +645,7 @@ impl ChatView {
         self.tree = None;
         self.log_viewer = None;
         self.model_picker = None;
+        self.children = children::Children::default();
         self.rows.clear();
         self.tool_rows.clear();
         self.active_assistant = None;
@@ -882,10 +891,22 @@ impl ChatView {
             "message_end" if record["message"]["role"] == "assistant" => {
                 self.apply_assistant_end(&record["message"], changed);
             }
+            "message_end" if record["message"]["customType"] == "subagent-notify" => {
+                self.children.notice(&record["message"]);
+            }
             "tool_execution_start" => {
                 let name = record["toolName"].as_str().unwrap_or("tool").to_string();
                 let detail = tool_detail(&record["args"]);
+                let child_call = if name == "subagent" {
+                    record["toolCallId"].as_str().map(|id| {
+                        self.children.start(id, &record["args"]);
+                        id.to_string()
+                    })
+                } else {
+                    None
+                };
                 self.rows.push(Row::Tool {
+                    child_call,
                     name,
                     detail,
                     status: ToolStatus::Running,
@@ -919,6 +940,9 @@ impl ChatView {
                 } else {
                     &record["partialResult"]
                 };
+                if let Some(call) = record["toolCallId"].as_str() {
+                    self.children.result(call, result, finished);
+                }
                 let index = record["toolCallId"]
                     .as_str()
                     .and_then(|call_id| self.tool_rows.get(call_id).copied());
@@ -1037,7 +1061,7 @@ impl ChatView {
     }
 
     fn apply_response(&mut self, record: &Value, cx: &mut Context<Self>) {
-        if self.finish_plugin_call(record, cx) {
+        if self.children.is_inspection_response(record) || self.finish_plugin_call(record, cx) {
             return;
         }
         let command = record["command"].as_str().unwrap_or("?");
@@ -1090,6 +1114,7 @@ impl ChatView {
                     .map(Vec::as_slice)
                     .unwrap_or_default();
                 // Notices that arrived during startup stay after the history.
+                self.children.restore(messages);
                 let mut rows = history_rows(messages);
                 rows.append(&mut self.rows);
                 self.rows = rows;
@@ -1479,6 +1504,7 @@ impl ChatView {
     /// Reloads the transcript after pi moved to another point or session.
     fn reload_transcript(&mut self, cx: &mut Context<Self>) {
         self.log_viewer = None;
+        self.children = children::Children::default();
         self.rows.clear();
         self.tool_rows.clear();
         self.active_assistant = None;
@@ -2040,7 +2066,10 @@ impl ChatView {
                     self.usage_extra = Some(extra);
                 }
             }
-            // Other statuses, setWidget, setTitle: no UI for them yet.
+            "setWidget" if record["widgetKey"] == "subagent-async" => self.children.widget(record),
+            "setWidget" if record["widgetKey"] == "subagent-inspect" => {
+                self.children.inspection_reply(record)
+            }
             _ => {}
         }
     }
@@ -2312,6 +2341,7 @@ impl ChatView {
                     .into_any_element()
             }
             Row::Tool {
+                child_call,
                 name,
                 detail,
                 status,
@@ -2432,6 +2462,7 @@ impl ChatView {
                                 }),
                         )
                     })
+                    .children(self.child_links(child_call.as_deref(), cx))
                     .children(plugin_prompt)
                     .children(plugin_view)
                     .into_any_element()
@@ -3131,7 +3162,9 @@ impl Render for ChatView {
         self.focus_new_prompt(window, cx);
         self.sync_plugin_view_focus(window, cx);
         let colors = cx.theme().colors.clone();
-        let body = if self.rows.is_empty() {
+        let body = if let Some(page) = self.child_page(cx) {
+            page
+        } else if self.rows.is_empty() {
             let content = match &self.connection {
                 Connection::Ready(_) if self.loading_history => v_flex()
                     .items_center()
@@ -3247,7 +3280,8 @@ impl Render for ChatView {
             .line_height(px(crate::settings::Settings::get(cx).agent_line_height()))
             .children(self.render_connection_banner(cx))
             .child(body)
-            .child(self.render_composer(window, cx))
+            .children((!self.child_page_open()).then(|| self.render_composer(window, cx)))
+            .children(self.child_tabs(cx))
             .children(tree_overlay)
             .children(log_overlay)
     }
@@ -3353,6 +3387,10 @@ fn history_rows(messages: &[Value]) -> Vec<Row> {
                         continue;
                     }
                     rows.push(Row::Tool {
+                        child_call: block["id"]
+                            .as_str()
+                            .filter(|_| block["name"] == "subagent")
+                            .map(str::to_owned),
                         name: block["name"].as_str().unwrap_or("tool").to_string(),
                         detail: tool_detail(&block["arguments"]),
                         status: ToolStatus::Running,
@@ -3402,6 +3440,7 @@ fn history_rows(messages: &[Value]) -> Vec<Row> {
             "bashExecution" => {
                 let text = message["output"].as_str().unwrap_or_default();
                 rows.push(Row::Tool {
+                    child_call: None,
                     name: "bash (manual)".to_string(),
                     detail: tool_detail(&json!({ "command": message["command"] })),
                     status: if message["exitCode"].as_i64() == Some(0) {
