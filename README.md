@@ -138,7 +138,6 @@ The Linux app is the same code as the Mac app. What differs:
 - Settings, projects and plugins live in `~/.config/pi-gpui` (or `$XDG_CONFIG_HOME/pi-gpui`).
 - Deleted sessions go to the Trash through `gio`, `kioclient` or `trash-put`; without any of them nothing is deleted.
 - Only one app runs per user: starting `pi-gpui` again, with a folder or a `pi-gpui://` link, hands it to the running app.
-- A copy that was not installed into a `pi-gpui.app` folder (a distro package, a `cargo build`) does not update itself.
 
 So far it was tested on Ubuntu 24.04 on arm64 in a VM (GNOME on X11, and Wayland under Weston). Other desktops, real GPUs and the x86_64 build have not been tried yet, hence beta: please report what you see in [#5](https://github.com/bytesbay/pi-gpui/issues/5).
 
@@ -157,7 +156,7 @@ script/bundle-linux.sh  # Linux: target/release/pi-gpui.app and the release tarb
 script/release.sh       # tag the Cargo.toml version; CI builds and publishes the release
 ```
 
-Rust 1.90 (pinned). On macOS you need Xcode; shaders compile at startup, so the Metal Toolchain is not needed. On Debian and Ubuntu `script/linux-deps.sh` installs the libraries the build needs (xkbcommon, Wayland, XCB, fontconfig, freetype); other distributions have the same ones under their own names. Set `PI_GPUI_PRETEND_VERSION=<older>` to try the update flow against a real release.
+Rust is pinned in `rust-toolchain.toml`. On macOS you need Xcode; shaders compile at startup, so the Metal Toolchain is not needed. On Debian and Ubuntu `script/linux-deps.sh` installs the libraries the build needs (xkbcommon, Wayland, XCB, fontconfig, freetype); other distributions have the same ones under their own names.
 
 Working on the Linux app from a Mac: [docs/LINUX_VM.md](docs/LINUX_VM.md) describes a local VM with a desktop that can be built in, clicked and screenshotted from the command line.
 
