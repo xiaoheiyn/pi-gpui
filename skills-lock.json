@@ -106,6 +106,13 @@
       "skillPath": "skills/engineering/retro/SKILL.md",
       "computedHash": "e260aefb7b75b3548a3ee9883afbf8808e521f2e86feec92399617894f83b7c2"
     },
+    "rust-best-practices": {
+      "source": "morganlinton/BeautifulRust",
+      "commit": "b9718436d77ee7bcf17cdcb6aa27628feb95d97a",
+      "sourceType": "github",
+      "skillPath": "skills/rust-best-practices/SKILL.md",
+      "computedHash": "313bea7637531b7f6fe60798bed2108e49594914d4db44e303b7d2312868b3d1"
+    },
     "setup-matt-pocock-skills": {
       "source": "mattpocock/skills",
       "commit": "abeeaf95660ba9e8b7c753eb38f441ca707a8823",
