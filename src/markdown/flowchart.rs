@@ -1,4 +1,4 @@
-use std::collections::VecDeque;
+use std::collections::HashSet;
 use std::sync::{Arc, LazyLock};
 
 use gpui::{
@@ -9,11 +9,20 @@ use regex::Regex;
 
 use gpui::prelude::*;
 
+pub(super) const MAX_SOURCE_BYTES: usize = 4096;
+const MAX_CACHED: usize = 16;
+
 #[derive(IntoElement)]
 pub(super) struct Diagram {
-    pub key: SharedString,
-    pub source: SharedString,
-    pub code: AnyElement,
+    key: SharedString,
+    source: SharedString,
+    code: AnyElement,
+}
+
+impl Diagram {
+    pub(super) fn new(key: SharedString, source: SharedString, code: AnyElement) -> Self {
+        Self { key, source, code }
+    }
 }
 
 impl RenderOnce for Diagram {
@@ -21,17 +30,27 @@ impl RenderOnce for Diagram {
         if !cx.has_global::<Diagrams>() {
             cx.set_global(Diagrams::default());
         }
-        let expired = cx.update_global::<Diagrams, _>(|diagrams, _| {
-            let entries = &mut diagrams.0;
-            entries.retain(|entry| entry != &self.source);
-            entries.push_back(self.source.clone());
-            // 限定图像缓存大小，避免长会话不断保留位图。
-            (entries.len() > 16).then(|| entries.pop_front()).flatten()
+        let (admitted, first) = cx.update_global::<Diagrams, _>(|diagrams, _| {
+            let first = diagrams.seen.is_empty();
+            (diagrams.admit(self.source.clone()), first)
         });
-        if let Some(expired) = expired {
-            cx.remove_asset::<Flowchart>(&expired);
+        if first {
+            window.on_next_frame(|window, cx| {
+                let (expired, retry) =
+                    cx.update_global::<Diagrams, _>(|diagrams, _| diagrams.finish_frame());
+                for source in expired {
+                    cx.remove_asset::<Flowchart>(&source);
+                }
+                if retry {
+                    window.refresh();
+                }
+            });
         }
-        let Some(Some(image)) = window.use_asset::<Flowchart>(&self.source, cx) else {
+        let image = admitted
+            .then(|| window.use_asset::<Flowchart>(&self.source, cx))
+            .flatten()
+            .flatten();
+        let Some(image) = image else {
             return self.code;
         };
         div()
@@ -44,9 +63,45 @@ impl RenderOnce for Diagram {
 }
 
 #[derive(Default)]
-struct Diagrams(VecDeque<SharedString>);
+struct Diagrams {
+    cached: HashSet<SharedString>,
+    seen: HashSet<SharedString>,
+    blocked: bool,
+}
 
 impl Global for Diagrams {}
+
+impl Diagrams {
+    fn admit(&mut self, source: SharedString) -> bool {
+        self.seen.insert(source.clone());
+        if self.cached.contains(&source) {
+            return true;
+        }
+        if self.cached.len() == MAX_CACHED {
+            self.blocked = true;
+            return false;
+        }
+        self.cached.insert(source);
+        true
+    }
+
+    fn finish_frame(&mut self) -> (Vec<SharedString>, bool) {
+        let mut expired = Vec::new();
+        if std::mem::take(&mut self.blocked) {
+            // 当前帧仍可见的图不能被逐个驱逐，否则每个加载结果都会触发下一轮加载。
+            self.cached.retain(|source| {
+                if self.seen.contains(source) {
+                    return true;
+                }
+                expired.push(source.clone());
+                false
+            });
+        }
+        self.seen.clear();
+        let retry = !expired.is_empty();
+        (expired, retry)
+    }
+}
 
 struct Flowchart;
 
@@ -81,7 +136,7 @@ impl Asset for Flowchart {
 }
 
 fn diagram_svg(source: &str) -> Option<String> {
-    if source.len() > 4096 {
+    if source.len() > MAX_SOURCE_BYTES {
         return None;
     }
     const LABEL: &str = r#"[^\[\](){}<>|"&;]{1,80}"#;
@@ -118,18 +173,20 @@ fn diagram_svg(source: &str) -> Option<String> {
                     return None;
                 }
                 in_group = true;
-            } else if matches!(
-                line.split([' ', '[', '(', '{']).next(),
-                Some(
-                    "subgraph"
-                        | "direction"
-                        | "style"
-                        | "class"
-                        | "classDef"
-                        | "linkStyle"
-                        | "click"
+            } else if line.replace("-->", "").contains("--")
+                || matches!(
+                    line.split([' ', '[', '(', '{']).next(),
+                    Some(
+                        "subgraph"
+                            | "direction"
+                            | "style"
+                            | "class"
+                            | "classDef"
+                            | "linkStyle"
+                            | "click"
+                    )
                 )
-            ) {
+            {
                 return None;
             }
         }
@@ -143,7 +200,21 @@ fn diagram_svg(source: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::diagram_svg;
+    use super::{Diagrams, MAX_CACHED, diagram_svg};
+
+    #[test]
+    fn more_visible_diagrams_than_cache_slots_do_not_reload_each_other() {
+        let mut cache = Diagrams::default();
+        for _ in 0..2 {
+            for index in 0..=MAX_CACHED {
+                assert_eq!(cache.admit(index.to_string().into()), index < MAX_CACHED);
+            }
+            assert!(!cache.finish_frame().1);
+        }
+        assert!(!cache.admit("another".into()));
+        assert!(cache.finish_frame().1);
+        assert!(cache.admit("another".into()));
+    }
 
     #[test]
     fn chinese_branches_and_groups_are_rendered_in_both_directions() {
@@ -168,6 +239,7 @@ mod tests {
             "click A \"https://example.com\"",
             "subgraph S",
             "style A fill:red",
+            r#"C["Run pi --version"]"#,
         ] {
             assert!(
                 diagram_svg(&format!("graph LR\nA --> B\n{line}")).is_none(),

@@ -455,12 +455,12 @@ impl Renderer<'_> {
                 closed,
             } => {
                 let code = self.code_block(key, text, language.as_deref(), edges);
-                if *closed && text.len() <= 4096 {
-                    flowchart::Diagram {
-                        key: format!("{key}:diagram").into(),
-                        source: text.clone().into(),
+                if *closed && text.len() <= flowchart::MAX_SOURCE_BYTES {
+                    flowchart::Diagram::new(
+                        format!("{key}:diagram").into(),
+                        text.clone().into(),
                         code,
-                    }
+                    )
                     .into_any_element()
                 } else {
                     code
