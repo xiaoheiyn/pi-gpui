@@ -3,6 +3,8 @@
 //! Zed's `markdown` crate). The source is parsed once per change into a small
 //! tree; every text block renders as one selectable text element.
 
+mod flowchart;
+
 use std::ops::Range;
 
 use gpui::{
@@ -36,6 +38,7 @@ pub enum Node {
     Code {
         language: Option<String>,
         text: String,
+        closed: bool,
     },
     Rule,
     Quote(Vec<Node>),
@@ -65,10 +68,34 @@ pub fn parse(source: &str) -> Vec<Node> {
         stack: vec![Frame::Root(Vec::new())],
         ..Builder::default()
     };
-    for event in Parser::new_ext(source, options) {
+    for (event, range) in Parser::new_ext(source, options).into_offset_iter() {
+        if let Event::Start(Tag::CodeBlock(CodeBlockKind::Fenced(info))) = &event {
+            builder.closed_fence =
+                info.split_whitespace().next() == Some("mermaid") && closed_fence(&source[range]);
+        }
         builder.event(event);
     }
     builder.finish()
+}
+
+fn closed_fence(source: &str) -> bool {
+    let mut lines = source.lines();
+    let Some(open) = lines.next() else {
+        return false;
+    };
+    let open = open.trim_start();
+    let Some(marker @ ('`' | '~')) = open.chars().next() else {
+        return false;
+    };
+    let count = open
+        .chars()
+        .take_while(|character| *character == marker)
+        .count();
+    // CommonMark 在输入结束时也生成 End 事件，必须从源码确认围栏确实闭合。
+    lines.last().is_some_and(|line| {
+        let close = line.trim_start_matches([' ', '\t', '>']).trim_end();
+        close.len() >= count && close.chars().all(|character| character == marker)
+    })
 }
 
 enum Frame {
@@ -81,7 +108,7 @@ enum Frame {
 enum Open {
     Paragraph { tight: bool },
     Heading(u8),
-    Code(Option<String>),
+    Code(Option<String>, bool),
 }
 
 #[derive(Default)]
@@ -94,6 +121,7 @@ struct Builder {
     strike: usize,
     links: Vec<SharedString>,
     table: Option<(Vec<Vec<Inline>>, bool)>,
+    closed_fence: bool,
 }
 
 impl Builder {
@@ -141,11 +169,11 @@ impl Builder {
                         .filter(|language| !language.is_empty()),
                     CodeBlockKind::Indented => None,
                 };
-                self.open = Some(Open::Code(language));
+                self.open = Some(Open::Code(language, std::mem::take(&mut self.closed_fence)));
             }
             Tag::HtmlBlock => {
                 self.flush();
-                self.open = Some(Open::Code(None));
+                self.open = Some(Open::Code(None, false));
             }
             Tag::BlockQuote(_) => {
                 self.flush();
@@ -240,7 +268,7 @@ impl Builder {
             // Tight list items have text without a paragraph around it.
             self.open = Some(Open::Paragraph { tight: true });
         }
-        let style = if matches!(self.open, Some(Open::Code(_))) {
+        let style = if matches!(self.open, Some(Open::Code(..))) {
             SpanStyle::default()
         } else {
             SpanStyle {
@@ -273,7 +301,8 @@ impl Builder {
         let node = match open {
             Open::Paragraph { tight } => Node::Paragraph { inline, tight },
             Open::Heading(level) => Node::Heading { level, inline },
-            Open::Code(language) => Node::Code {
+            Open::Code(language, closed) => Node::Code {
+                closed,
                 language,
                 text: inline.text.trim_end_matches('\n').to_string(),
             },
@@ -420,7 +449,23 @@ impl Renderer<'_> {
                     )
                     .into_any_element()
             }
-            Node::Code { language, text } => self.code_block(key, text, language.as_deref(), edges),
+            Node::Code {
+                language,
+                text,
+                closed,
+            } => {
+                let code = self.code_block(key, text, language.as_deref(), edges);
+                if *closed && text.len() <= 4096 {
+                    flowchart::Diagram {
+                        key: format!("{key}:diagram").into(),
+                        source: text.clone().into(),
+                        code,
+                    }
+                    .into_any_element()
+                } else {
+                    code
+                }
+            }
             Node::Rule => div()
                 .mt(top(PARAGRAPH_SPACING))
                 .mb(bottom(PARAGRAPH_SPACING))
@@ -679,6 +724,26 @@ mod tests {
             Node::Code { text, .. } => text,
             _ => "",
         }
+    }
+
+    #[test]
+    fn mermaid_only_becomes_a_diagram_candidate_after_a_matching_fence() {
+        let open = "```mermaid
+flowchart TD
+A --> B";
+        assert!(matches!(
+            parse(open).as_slice(),
+            [Node::Code { closed: false, .. }]
+        ));
+        assert!(matches!(
+            parse(&format!(
+                "{open}
+```
+"
+            ))
+            .as_slice(),
+            [Node::Code { closed: true, .. }]
+        ));
     }
 
     #[test]
