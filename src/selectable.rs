@@ -14,8 +14,8 @@ use gpui::{
     App, AvailableSpace, Bounds, Context, CursorStyle, DispatchPhase, ElementId, Entity,
     FocusHandle, FontStyle, FontWeight, GlobalElementId, Hitbox, HitboxBehavior, Hsla, LayoutId,
     MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad, Pixels, SharedString,
-    StrikethroughStyle, Style, TextAlign, TextRun, UnderlineStyle, Window, fill, point, prelude::*,
-    px, relative, size,
+    StrikethroughStyle, Style, TextAlign, TextRun, UnderlineStyle, Window, WrappedLine, fill,
+    point, prelude::*, px, relative, size,
 };
 
 use crate::text_input::{TextLayout, paragraph_range_at, word_range_at};
@@ -281,6 +281,14 @@ impl SelectableText {
         (runs, font_size, line_height)
     }
 
+    pub(crate) fn unwrapped_width(&self, window: &Window, cx: &App) -> Pixels {
+        let (runs, font_size, line_height) = self.text_params(window, cx);
+        window
+            .text_system()
+            .shape_text(self.text.clone(), font_size, &runs, None, None)
+            .map_or(px(0.), |lines| widest_line(&lines, line_height))
+    }
+
     fn shape(&self, width: Option<Pixels>, window: &mut Window, cx: &App) -> Option<TextLayout> {
         let (runs, font_size, line_height) = self.text_params(window, cx);
         let lines = window
@@ -289,6 +297,13 @@ impl SelectableText {
             .ok()?;
         Some(TextLayout::new(lines.into_vec(), line_height))
     }
+}
+
+fn widest_line(lines: &[WrappedLine], line_height: Pixels) -> Pixels {
+    lines
+        .iter()
+        .map(|line| line.size(line_height).width)
+        .fold(px(0.), Pixels::max)
 }
 
 pub struct PrepaintState {
@@ -345,12 +360,7 @@ impl Element for SelectableText {
                     .map(|line| line.size(line_height).height)
                     .fold(px(0.), |total, height| total + height)
                     .max(line_height);
-                let width = width.unwrap_or_else(|| {
-                    lines
-                        .iter()
-                        .map(|line| line.size(line_height).width)
-                        .fold(px(0.), Pixels::max)
-                });
+                let width = width.unwrap_or_else(|| widest_line(&lines, line_height));
                 size(width, height)
             });
         (layout_id, ())

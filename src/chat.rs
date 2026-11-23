@@ -2317,7 +2317,6 @@ impl ChatView {
                             &format!("{index}:md"),
                             &blocks,
                             &self.selection,
-                            window,
                             cx,
                         ))
                     })
@@ -2530,7 +2529,6 @@ impl ChatView {
                             &format!("{index}:summary"),
                             &nodes,
                             &self.selection,
-                            window,
                             cx,
                         ))
                 });

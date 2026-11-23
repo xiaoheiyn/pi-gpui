@@ -8,8 +8,8 @@ mod flowchart;
 use std::ops::Range;
 
 use gpui::{
-    AnyElement, App, ClipboardItem, ElementId, Entity, FontWeight, Hsla, Pixels, SharedString,
-    TextRun, Window, div, px,
+    AnyElement, App, ClipboardItem, ElementId, Entity, FontWeight, Hsla, SharedString, Window, div,
+    px,
 };
 use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 
@@ -365,7 +365,6 @@ pub fn render(
     key: &str,
     nodes: &[Node],
     selection: &Entity<TextSelection>,
-    window: &mut Window,
     cx: &App,
 ) -> AnyElement {
     let settings = Settings::get(cx);
@@ -389,7 +388,7 @@ pub fn render(
                 first: index == 0,
                 last: index == last,
             };
-            renderer.node(&format!("{key}:{index}"), node, edge, window)
+            renderer.node(&format!("{key}:{index}"), node, edge)
         }))
         .into_any_element()
 }
@@ -417,17 +416,15 @@ impl Renderer<'_> {
             .text_size(px(self.body), px(self.body_line))
     }
 
-    fn children(&self, key: &str, nodes: &[Node], window: &mut Window) -> Vec<AnyElement> {
+    fn children(&self, key: &str, nodes: &[Node]) -> Vec<AnyElement> {
         nodes
             .iter()
             .enumerate()
-            .map(|(index, node)| {
-                self.node(&format!("{key}.{index}"), node, Edges::default(), window)
-            })
+            .map(|(index, node)| self.node(&format!("{key}.{index}"), node, Edges::default()))
             .collect()
     }
 
-    fn node(&self, key: &str, node: &Node, edges: Edges, window: &mut Window) -> AnyElement {
+    fn node(&self, key: &str, node: &Node, edges: Edges) -> AnyElement {
         let colors = &self.cx.theme().colors;
         let top = |margin: f32| if edges.first { px(0.) } else { px(margin) };
         let bottom = |margin: f32| if edges.last { px(0.) } else { px(margin) };
@@ -477,7 +474,7 @@ impl Renderer<'_> {
                 .mb(bottom(PARAGRAPH_SPACING))
                 .border_l_4()
                 .border_color(colors.border)
-                .children(self.children(key, children, window))
+                .children(self.children(key, children))
                 .into_any_element(),
             Node::List { start, items } => div()
                 .pl(px(10.))
@@ -495,14 +492,17 @@ impl Renderer<'_> {
                         .gap(px(4.))
                         .mb(px(4.))
                         .child(bullet)
-                        .child(div().flex_1().min_w(px(0.)).children(self.children(
-                            &item_key,
-                            &item.children,
-                            window,
-                        )))
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w(px(0.))
+                                .children(self.children(&item_key, &item.children)),
+                        )
                 }))
                 .into_any_element(),
-            Node::Table { rows, header } => self.table(key, rows, *header, edges, window),
+            Node::Table { rows, header } => {
+                self.table(key, rows, *header, edges).into_any_element()
+            }
         }
     }
 
@@ -616,28 +616,52 @@ impl Renderer<'_> {
             .into_any_element()
     }
 
-    /// Zed's markdown table: columns as wide as their content, 1.5 px outer
-    /// border, title bar colored header, striped rows, horizontal scrolling.
-    fn table(
-        &self,
-        key: &str,
-        rows: &[Vec<Inline>],
-        header: bool,
-        edges: Edges,
-        window: &mut Window,
-    ) -> AnyElement {
-        let colors = &self.cx.theme().colors;
+    fn table(&self, key: &str, rows: &[Vec<Inline>], header: bool, edges: Edges) -> Table {
         let columns = rows.iter().map(Vec::len).max().unwrap_or(0);
-        let mut widths = vec![px(0.); columns];
-        for (row_index, row) in rows.iter().enumerate() {
-            let weight = if header && row_index == 0 {
-                FontWeight::SEMIBOLD
-            } else {
-                FontWeight::NORMAL
-            };
+        let empty = Inline::default();
+        let rows = rows
+            .iter()
+            .enumerate()
+            .map(|(row_index, row)| {
+                (0..columns)
+                    .map(|column| {
+                        self.text(
+                            format!("{key}.{row_index}.{column}"),
+                            row.get(column).unwrap_or(&empty),
+                        )
+                        .no_wrap()
+                        .when(header && row_index == 0, |this| {
+                            this.weight(FontWeight::SEMIBOLD)
+                        })
+                    })
+                    .collect()
+            })
+            .collect();
+        Table {
+            key: format!("{key}:table").into(),
+            rows,
+            header,
+            edges,
+        }
+    }
+}
+
+#[derive(IntoElement)]
+struct Table {
+    key: SharedString,
+    rows: Vec<Vec<SelectableText>>,
+    header: bool,
+    edges: Edges,
+}
+
+impl RenderOnce for Table {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let colors = &cx.theme().colors;
+        // 布局时才能拿到单元格实际继承的字体，列宽必须用同一字体测量。
+        let mut widths = vec![px(0.); self.rows.first().map_or(0, Vec::len)];
+        for row in &self.rows {
             for (column, cell) in row.iter().enumerate() {
-                widths[column] =
-                    widths[column].max(text_width(&cell.text, weight, self.body, window));
+                widths[column] = widths[column].max(cell.unwrapped_width(window, cx));
             }
         }
         let border = colors.border;
@@ -650,8 +674,8 @@ impl Renderer<'_> {
             .border_color(border)
             .rounded(px(2.))
             .overflow_hidden()
-            .children(rows.iter().enumerate().map(|(row_index, row)| {
-                let is_header = header && row_index == 0;
+            .children(self.rows.into_iter().enumerate().map(|(row_index, row)| {
+                let is_header = self.header && row_index == 0;
                 let background: Option<Hsla> = if is_header {
                     Some(header_background)
                 } else if row_index % 2 == 1 {
@@ -665,53 +689,26 @@ impl Renderer<'_> {
                 row_element
                     .when_some(background, |this, background| this.bg(background))
                     .when(row_index > 0, |this| this.border_t_1().border_color(border))
-                    .children((0..columns).map(|column| {
-                        let cell = row.get(column).cloned().unwrap_or_default();
+                    .children(row.into_iter().enumerate().map(|(column, cell)| {
                         div()
                             .w(widths[column] + px(8. + 2.))
                             .flex_none()
                             .px(px(4.))
                             .py(px(2.))
                             .when(column > 0, |this| this.border_l_1().border_color(border))
-                            .child(
-                                self.text(format!("{key}.{row_index}.{column}"), &cell)
-                                    .no_wrap()
-                                    .when(is_header, |this| this.weight(FontWeight::SEMIBOLD)),
-                            )
+                            .child(cell)
                     }))
             }));
 
         let mut scroller = div()
-            .id(ElementId::Name(format!("{key}:table").into()))
+            .id(ElementId::Name(self.key))
             .flex()
             .overflow_x_scroll()
-            .mb(if edges.last { px(0.) } else { px(8.) })
+            .mb(if self.edges.last { px(0.) } else { px(8.) })
             .child(table);
         scroller.style().restrict_scroll_to_axis = Some(true);
-        scroller.into_any_element()
+        scroller
     }
-}
-
-/// Unwrapped width of the widest line of `text` in the body font.
-fn text_width(text: &str, weight: FontWeight, size: f32, window: &mut Window) -> Pixels {
-    let mut font = window.text_style().font();
-    font.weight = weight;
-    text.split('\n')
-        .map(|line| {
-            let run = TextRun {
-                len: line.len(),
-                font: font.clone(),
-                color: Hsla::default(),
-                background_color: None,
-                underline: None,
-                strikethrough: None,
-            };
-            window
-                .text_system()
-                .shape_line(SharedString::from(line.to_string()), px(size), &[run], None)
-                .width
-        })
-        .fold(px(0.), Pixels::max)
 }
 
 #[cfg(test)]
