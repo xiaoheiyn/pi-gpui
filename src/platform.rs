@@ -160,10 +160,76 @@ pub fn move_to_trash(path: &std::path::Path) -> Result<(), String> {
     Err("no trash tool found (install gio, kioclient or trash-cli)".to_string())
 }
 
+/// 将会话文件移入 Windows 回收站，保留恢复能力。
 #[cfg(windows)]
-pub fn move_to_trash(_: &std::path::Path) -> Result<(), String> {
-    // ADR-shortcut: Windows 预览先从资源管理器手动移入回收站，支持系统回收接口后再启用。
-    Err("Use File Explorer to move the file to the Recycle Bin.".into())
+pub fn move_to_trash(path: &std::path::Path) -> Result<(), String> {
+    use widestring::U16CString;
+    use windows::Win32::UI::Shell::{
+        BHID_Transfer, FOLDERID_RecycleBinFolder, IShellItem, ITransferSource, KF_FLAG_DEFAULT,
+        SHCreateItemFromParsingName, SHGetKnownFolderItem,
+    };
+    use windows::core::PCWSTR;
+
+    let path = std::path::absolute(path).map_err(|error| error.to_string())?;
+    let metadata = path.symlink_metadata().map_err(|error| error.to_string())?;
+    if !metadata.file_type().is_file() {
+        return Err("The session path is not a regular file.".into());
+    }
+    let path = U16CString::from_os_str(path).map_err(|error| error.to_string())?;
+
+    // SAFETY: GPUI 已初始化调用线程的 COM，路径在调用期间始终有效且以 NUL 结尾。
+    let recycle = || unsafe {
+        let item: IShellItem = SHCreateItemFromParsingName(PCWSTR(path.as_ptr()), None)?;
+        let recycle_bin: IShellItem =
+            SHGetKnownFolderItem(&FOLDERID_RecycleBinFolder, KF_FLAG_DEFAULT, None)?;
+        let transfer: ITransferSource = item.GetParent()?.BindToHandler(None, &BHID_Transfer)?;
+        // 回收失败时保留原文件，避免退回到永久删除。
+        transfer.RecycleItem(&item, &recycle_bin, 0).map(|_| ())
+    };
+    recycle().map_err(|error| error.to_string())
+}
+
+#[cfg(all(test, windows))]
+#[test]
+#[ignore = "requires the Windows Recycle Bin on the temporary file's drive"]
+fn recycles_a_session_file() {
+    use std::io::Write as _;
+    use std::os::windows::fs::OpenOptionsExt as _;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx, CoUninitialize};
+
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let path = std::env::temp_dir().join(format!("pi-gpui 会话 {stamp}.jsonl"));
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .share_mode(0)
+        .open(&path)
+        .unwrap();
+    file.write_all(b"{}\n").unwrap();
+
+    // SAFETY: 测试线程自行初始化 COM，并在回收接口释放对象后反初始化。
+    let (locked_result, result) = unsafe {
+        CoInitializeEx(None, COINIT_APARTMENTTHREADED).ok().unwrap();
+        let locked_result = move_to_trash(&path);
+        drop(file);
+        let result = move_to_trash(&path);
+        CoUninitialize();
+        (locked_result, result)
+    };
+    if result.is_err() && path.exists() {
+        std::fs::remove_file(&path).unwrap();
+    }
+    assert!(locked_result.is_err(), "recycled a locked session file");
+    assert!(
+        result.is_ok(),
+        "could not recycle the test session: {result:?}"
+    );
+    assert!(!path.exists(), "recycled session still exists at {path:?}");
 }
 
 #[cfg(windows)]
