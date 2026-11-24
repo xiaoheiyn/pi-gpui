@@ -124,7 +124,7 @@ A theme is a JSON file in the `themes` folder next to `settings.json`; "New them
 
 ## Compatibility
 
-The app has its own version and supports a range of pi versions (`MIN_PI` and `TESTED_PI` in `src/pi.rs`). pi minors newer than the tested one still run, marked "not tested yet". Each release publishes `pi-compat.json` so you can check compatibility before upgrading. The app updates pi only when you click.
+The app has its own version and supports a range of pi versions (`MIN_PI` and `TESTED_PI` in `src/pi.rs`). Newer pi minors in the same major still run. The pi update dialog flags updates beyond the tested range. Each release publishes `pi-compat.json` so you can check compatibility before upgrading. The app updates pi only when you click.
 
 Tree navigation needs something pi's RPC lacks, so the app passes a small extension of its own (`extensions/pi-gpui-bridge.ts`) to the pi processes it starts. Nothing is installed.
 

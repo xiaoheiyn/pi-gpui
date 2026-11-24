@@ -56,8 +56,7 @@ pub const MIN_PI: Version = Version {
     patch: 0,
 };
 
-/// The newest pi minor the app was tested with. Newer minors of the same
-/// major still run, with a note that they are untested.
+/// 测试范围与支持范围分开，便于在更新前提示用户。
 pub const TESTED_PI: Version = Version {
     major: 1,
     minor: 5,
@@ -92,12 +91,6 @@ pub fn compatibility_json() -> String {
 pub struct Installation {
     pub executable: PathBuf,
     pub version: Version,
-}
-
-impl Installation {
-    pub fn is_untested(&self) -> bool {
-        is_untested(self.version)
-    }
 }
 
 #[derive(Clone, Debug)]

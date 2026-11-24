@@ -45,7 +45,7 @@ The app has its own version (semver, currently `0.x`). pi support is a range kep
 
 - `MIN_PI`: the oldest supported pi. Older versions are refused.
 - The major of `MIN_PI`: a new pi major is refused until an app release supports it.
-- `TESTED_PI`: the newest pi minor the app was tested with. Newer minors of the same major run, with a note in the sidebar ("not tested yet").
+- `TESTED_PI`: the newest pi minor the app was tested with. Newer minors of the same major run. The update dialog flags updates beyond the tested range.
 
 ```text
 supported(pi) = pi >= MIN_PI AND pi.major == MIN_PI.major
@@ -56,7 +56,7 @@ untested(pi)  = (pi.major, pi.minor) > (TESTED_PI.major, TESTED_PI.minor)
 |---|---|---|
 | 1.4.0 / 1.4 | 1.3.9 | Refused: update pi |
 | 1.4.0 / 1.4 | 1.4.7 | Supported |
-| 1.4.0 / 1.4 | 1.6.0 | Runs, marked "not tested yet" |
+| 1.4.0 / 1.4 | 1.6.0 | Supported |
 | 1.4.0 / 1.4 | 2.0.0 | Refused: install a compatible Pi GPUI release or use a supported pi version |
 
 This is common practice for clients of tools made by others (compare kubectl's version skew or the `engines` range of VS Code extensions): a new pi minor does not break the app, and the app version describes the app.

@@ -2925,17 +2925,18 @@ impl HubView {
                     .child(Spinner::new().size(IconSize::XSmall))
                     .child(LoadingLabel::new("Checking pi…").size(LabelSize::Small)),
             ),
-            InstallationState::Ready(installation) => {
-                let untested = installation.is_untested();
-                let buttons = self.render_update_buttons(cx);
-                footer.child(
-                    h_flex()
-                        .gap(px(6.))
-                        .child(self.render_pi_version(installation, untested))
-                        .child(div().flex_1())
-                        .children(buttons),
-                )
-            }
+            InstallationState::Ready(installation) => footer.child(
+                h_flex()
+                    .gap(px(6.))
+                    .child(Indicator::dot(Color::Success))
+                    .child(
+                        Label::new(format!("pi {}", installation.version))
+                            .size(LabelSize::Small)
+                            .color(Color::Muted),
+                    )
+                    .child(div().flex_1())
+                    .children(self.render_update_buttons(cx)),
+            ),
             InstallationState::Failed(error) => {
                 let (color, label) = match error {
                     pi::CheckError::NotFound => (Color::Error, "pi not installed".to_string()),
@@ -3885,34 +3886,6 @@ impl HubView {
         })
         .detach();
         cx.notify();
-    }
-
-    fn render_pi_version(&self, installation: &Installation, untested: bool) -> AnyElement {
-        h_flex()
-            .id("pi-version")
-            .gap(px(6.))
-            .child(Indicator::dot(if untested {
-                Color::Warning
-            } else {
-                Color::Success
-            }))
-            .child(
-                Label::new(if untested {
-                    format!("pi {} · not tested yet", installation.version)
-                } else {
-                    format!("pi {}", installation.version)
-                })
-                .size(LabelSize::Small)
-                .color(Color::Muted),
-            )
-            .when(untested, |this| {
-                this.tooltip(Tooltip::text(format!(
-                    "This app was tested with pi up to {}.{}.x. It should work.",
-                    pi::TESTED_PI.major,
-                    pi::TESTED_PI.minor
-                )))
-            })
-            .into_any_element()
     }
 
     /// Buttons next to the pi version: a pi update and package updates.
