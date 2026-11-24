@@ -29,7 +29,7 @@ pub(super) struct LogViewer {
 
 impl ChatView {
     pub(super) fn open_log(&mut self, row: usize, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(Row::Tool { status, log, .. }) = self.rows.get(row) else {
+        let Some(Row::Tool { status, log, .. }) = self.visible_rows().get(row) else {
             return;
         };
         let load_file = *status != ToolStatus::Running && log.file.is_some();
@@ -56,7 +56,12 @@ impl ChatView {
 
     pub(super) fn close_log(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.log_viewer.take().is_some() {
-            window.focus(&self.composer.read(cx).focus_handle(cx), cx);
+            let focus = if self.child_page_open() {
+                self.focus_handle.clone()
+            } else {
+                self.composer.read(cx).focus_handle(cx)
+            };
+            window.focus(&focus, cx);
             cx.notify();
         }
     }
@@ -67,10 +72,14 @@ impl ChatView {
 
     /// Takes the row's latest output, unless the full file is shown.
     fn sync_log_viewer(&mut self) {
-        let Some(viewer) = &mut self.log_viewer else {
+        let Some(viewer) = &self.log_viewer else {
             return;
         };
-        let Some(Row::Tool { log, .. }) = self.rows.get(viewer.row) else {
+        let Some(Row::Tool { log, .. }) = self.visible_rows().get(viewer.row) else {
+            return;
+        };
+        let text = log.text.clone();
+        let Some(viewer) = &mut self.log_viewer else {
             return;
         };
         if viewer.loading
@@ -78,12 +87,11 @@ impl ChatView {
             || viewer
                 .source
                 .as_ref()
-                .is_some_and(|source| Arc::ptr_eq(source, &log.text))
+                .is_some_and(|source| Arc::ptr_eq(source, &text))
         {
             return;
         }
-        let lines: Vec<SharedString> = log
-            .text
+        let lines: Vec<SharedString> = text
             .lines()
             .map(|line| SharedString::from(line.to_string()))
             .collect();
@@ -101,23 +109,25 @@ impl ChatView {
             viewer.list.reset(lines.len());
         }
         viewer.lines = lines;
-        viewer.text = log.text.clone();
-        viewer.source = Some(log.text.clone());
+        viewer.text = text.clone();
+        viewer.source = Some(text);
     }
 
     /// Reads the complete output pi saved, in the background.
     pub(super) fn load_log_file(&mut self, cx: &mut Context<Self>) {
-        let Some(viewer) = &mut self.log_viewer else {
+        let Some(row) = self.log_viewer.as_ref().map(|viewer| viewer.row) else {
             return;
         };
-        let Some(Row::Tool { log, .. }) = self.rows.get(viewer.row) else {
+        let Some(Row::Tool { log, .. }) = self.visible_rows().get(row) else {
             return;
         };
         let Some(file) = log.file.clone() else {
             return;
         };
+        let Some(viewer) = &mut self.log_viewer else {
+            return;
+        };
         viewer.loading = true;
-        let row = viewer.row;
         let read = cx.background_spawn(async move { read_tail(&file) });
         viewer._load = cx.spawn(async move |this, cx| {
             let result = read.await;
@@ -164,7 +174,7 @@ impl ChatView {
             status,
             log,
             ..
-        }) = self.rows.get(viewer.row)
+        }) = self.visible_rows().get(viewer.row)
         else {
             return None;
         };

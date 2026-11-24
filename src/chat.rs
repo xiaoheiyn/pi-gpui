@@ -456,7 +456,12 @@ impl ChatView {
         let frames_subscription = cx.observe(&frames, |_, _, cx| cx.notify());
         // The global default wins again: forget per-item choices. Heights change.
         let details_subscription = cx.observe_global::<DetailsExpanded>(|this, cx| {
-            for row in &mut this.rows {
+            for row in this.rows.iter_mut().chain(
+                this.children
+                    .active
+                    .iter_mut()
+                    .flat_map(|child| &mut child.rows),
+            ) {
                 match row {
                     Row::Assistant {
                         thought_overrides, ..
@@ -466,15 +471,24 @@ impl ChatView {
                 }
             }
             this.list_state.reset(this.rows.len());
+            if let Some(child) = &this.children.active {
+                child.list.remeasure();
+            }
             cx.notify();
         });
         let appearance_subscriptions = [
             cx.observe_global::<crate::settings::Settings>(|this, cx| {
                 this.list_state.reset(this.rows.len());
+                if let Some(child) = &this.children.active {
+                    child.list.remeasure();
+                }
                 cx.notify();
             }),
             cx.observe_global::<crate::ui::Theme>(|this, cx| {
                 this.list_state.reset(this.rows.len());
+                if let Some(child) = &this.children.active {
+                    child.list.remeasure();
+                }
                 cx.notify();
             }),
         ];
@@ -978,10 +992,11 @@ impl ChatView {
                             log.started
                                 .map(|started| started.elapsed().as_millis() as u64)
                         });
-                        if self
-                            .log_viewer
-                            .as_ref()
-                            .is_some_and(|viewer| viewer.row == index)
+                        if self.children.active.is_none()
+                            && self
+                                .log_viewer
+                                .as_ref()
+                                .is_some_and(|viewer| viewer.row == index)
                         {
                             self.log_finished = Some(index);
                         }
@@ -1120,7 +1135,7 @@ impl ChatView {
                     .unwrap_or_default();
                 // Notices that arrived during startup stay after the history.
                 self.children.restore(messages);
-                let mut rows = history_rows(messages);
+                let mut rows = history_rows(messages, false);
                 rows.append(&mut self.rows);
                 self.rows = rows;
                 self.needs_list_reset = true;
@@ -1499,9 +1514,10 @@ impl ChatView {
     }
 
     fn toggle_summary(&mut self, row: usize, cx: &mut Context<Self>) {
-        if let Some(Row::Summary { expanded, .. }) = self.rows.get_mut(row) {
+        let (rows, list) = self.visible_transcript_mut();
+        if let Some(Row::Summary { expanded, .. }) = rows.get_mut(row) {
             *expanded = !*expanded;
-            self.list_state.splice(row..row + 1, 1);
+            list.remeasure_items(row..row + 1);
             cx.notify();
         }
     }
@@ -1835,22 +1851,24 @@ impl ChatView {
 
     fn toggle_thought(&mut self, row: usize, thought: usize, cx: &mut Context<Self>) {
         let default = details_expanded(cx);
+        let (rows, list) = self.visible_transcript_mut();
         if let Some(Row::Assistant {
             thought_overrides, ..
-        }) = self.rows.get_mut(row)
+        }) = rows.get_mut(row)
         {
             let open = thought_overrides.get(&thought).copied().unwrap_or(default);
             thought_overrides.insert(thought, !open);
-            self.list_state.splice(row..row + 1, 1);
+            list.remeasure_items(row..row + 1);
             cx.notify();
         }
     }
 
     fn toggle_tool(&mut self, row: usize, cx: &mut Context<Self>) {
         let default = details_expanded(cx);
-        if let Some(Row::Tool { expanded, .. }) = self.rows.get_mut(row) {
+        let (rows, list) = self.visible_transcript_mut();
+        if let Some(Row::Tool { expanded, .. }) = rows.get_mut(row) {
             *expanded = Some(!expanded.unwrap_or(default));
-            self.list_state.splice(row..row + 1, 1);
+            list.remeasure_items(row..row + 1);
             cx.notify();
         }
     }
@@ -2216,13 +2234,46 @@ impl ChatView {
         )
     }
 
+    fn visible_rows(&self) -> &[Row] {
+        match &self.children.active {
+            Some(child) => &child.rows,
+            None => &self.rows,
+        }
+    }
+
+    fn visible_transcript_mut(&mut self) -> (&mut [Row], &ListState) {
+        match &mut self.children.active {
+            Some(child) => (&mut child.rows, &child.list),
+            None => (&mut self.rows, &self.list_state),
+        }
+    }
+
+    fn render_transcript(&self, state: &ListState, cx: &mut Context<Self>) -> AnyElement {
+        div()
+            .flex_1()
+            .min_h(px(0.))
+            .child(
+                list(
+                    state.clone(),
+                    cx.processor(|this, index, window, cx| this.render_row(index, window, cx)),
+                )
+                .size_full(),
+            )
+            .into_any_element()
+    }
+
     fn render_row(
         &mut self,
         index: usize,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let Some(row) = self.rows.get(index) else {
+        let child_history = self.child_page_open();
+        let rows = match &self.children.active {
+            Some(child) => &child.rows,
+            None => &self.rows,
+        };
+        let Some(row) = rows.get(index) else {
             return div().into_any_element();
         };
         let colors = cx.theme().colors.clone();
@@ -2358,7 +2409,11 @@ impl ChatView {
                 let plugin_view = view
                     .as_ref()
                     .map(|call_id| self.render_plugin_view(call_id, name, cx));
-                let plugin_prompt = self.render_plugin_prompt(index, window, cx);
+                let plugin_prompt = if child_history {
+                    None
+                } else {
+                    self.render_plugin_prompt(index, window, cx)
+                };
                 let has_details = !output.is_empty() || !images.is_empty();
                 let running = *status == ToolStatus::Running;
                 // Output streams in open, unless the user closed this row.
@@ -2466,7 +2521,9 @@ impl ChatView {
                                 }),
                         )
                     })
-                    .children(self.child_links(child_call.as_deref(), cx))
+                    .when(!child_history, |this| {
+                        this.children(self.child_links(child_call.as_deref(), cx))
+                    })
                     .children(plugin_prompt)
                     .children(plugin_view)
                     .into_any_element()
@@ -2601,10 +2658,12 @@ impl ChatView {
             }
         };
 
-        let forkable = !matches!(
-            row,
-            Row::Notice { .. } | Row::Summary { .. } | Row::Dialog(_)
-        ) && self.can_fork();
+        let forkable = !child_history
+            && !matches!(
+                row,
+                Row::Notice { .. } | Row::Summary { .. } | Row::Dialog(_)
+            )
+            && self.can_fork();
         let sent_at = match row {
             Row::User { at, .. } | Row::Assistant { at, .. } => *at,
             _ => None,
@@ -3084,6 +3143,7 @@ impl ChatView {
                     .max_w(px(CONTENT_MAX_WIDTH))
                     .gap(px(6.))
                     .child(activity_line)
+                    .children(self.child_tabs(cx))
                     .child(
                         v_flex()
                             .relative()
@@ -3198,17 +3258,7 @@ impl Render for ChatView {
                 .child(content)
                 .into_any_element()
         } else {
-            div()
-                .flex_1()
-                .min_h(px(0.))
-                .child(
-                    list(
-                        self.list_state.clone(),
-                        cx.processor(|this, index, window, cx| this.render_row(index, window, cx)),
-                    )
-                    .size_full(),
-                )
-                .into_any_element()
+            self.render_transcript(&self.list_state, cx)
         };
 
         // Spinners and loading labels only move while pi is busy.
@@ -3219,6 +3269,7 @@ impl Render for ChatView {
             || self.compacting
             || self.navigating.is_some()
             || self.forking.is_some()
+            || self.children.active_running()
             || self.tree.as_ref().is_some_and(|view| view.lines.is_none());
         self.animation.set_active(animating, cx);
         // The picker scrolled to its highlight during this render's layout.
@@ -3283,8 +3334,11 @@ impl Render for ChatView {
             .line_height(px(crate::settings::Settings::get(cx).agent_line_height()))
             .children(self.render_connection_banner(cx))
             .child(body)
-            .children((!self.child_page_open()).then(|| self.render_composer(window, cx)))
-            .children(self.child_tabs(cx))
+            .children(if self.child_page_open() {
+                self.child_tabs(cx)
+            } else {
+                Some(self.render_composer(window, cx).into_any_element())
+            })
             .children(tree_overlay)
             .children(log_overlay)
     }
@@ -3358,7 +3412,7 @@ fn format_time(at: i64, full: bool) -> String {
 /// Rebuilds rows from `get_messages`. Tool calls come from the assistant's
 /// `toolCall` blocks and are completed by the matching `toolResult` message,
 /// the same shape the live stream produces from `tool_execution_*` events.
-fn history_rows(messages: &[Value]) -> Vec<Row> {
+fn history_rows(messages: &[Value], running: bool) -> Vec<Row> {
     let mut rows = Vec::new();
     let mut tool_rows = HashMap::new();
     for message in messages {
@@ -3487,7 +3541,8 @@ fn history_rows(messages: &[Value]) -> Vec<Row> {
     }
     // A call without a result was interrupted; do not show it as still running.
     for row in &mut rows {
-        if let Row::Tool { status, .. } = row
+        if !running
+            && let Row::Tool { status, .. } = row
             && *status == ToolStatus::Running
         {
             *status = ToolStatus::Failed;
@@ -3843,7 +3898,7 @@ mod tests {
                     "content": [{ "type": "text", "text": "src" }] }),
             json!({ "role": "assistant", "stopReason": "stop", "content": [{ "type": "text", "text": "done" }] }),
         ];
-        let rows = history_rows(&messages);
+        let rows = history_rows(&messages, false);
         assert_eq!(rows.len(), 5);
         assert!(matches!(&rows[0], Row::User { text, .. } if text.as_ref() == "list files"));
         assert!(

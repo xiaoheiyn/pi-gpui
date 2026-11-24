@@ -30,6 +30,72 @@ struct PendingInspection {
     rpc: String,
 }
 
+pub(super) struct ChildTranscript {
+    index: usize,
+    messages: Vec<Value>,
+    running: bool,
+    pub(super) rows: Vec<Row>,
+    pub(super) list: ListState,
+}
+
+impl ChildTranscript {
+    fn new(index: usize) -> Self {
+        Self {
+            index,
+            messages: Vec::new(),
+            running: false,
+            rows: Vec::new(),
+            list: ListState::new(0, ListAlignment::Bottom, px(LIST_OVERDRAW)),
+        }
+    }
+
+    fn update(&mut self, messages: Vec<Value>, running: bool) -> bool {
+        if self.messages == messages && self.running == running {
+            return false;
+        }
+        let mut rows = history_rows(&messages, running);
+        // 子会话记录里的路径不能为工具日志授权。
+        for row in &mut rows {
+            if let Row::Tool { log, .. } = row {
+                log.file = None;
+            }
+        }
+        if rows.len() >= self.rows.len() && messages.starts_with(&self.messages) {
+            for (previous, row) in self.rows.iter_mut().zip(&mut rows) {
+                match (previous, row) {
+                    (
+                        Row::Assistant {
+                            thought_overrides: old,
+                            ..
+                        },
+                        Row::Assistant {
+                            thought_overrides, ..
+                        },
+                    ) => {
+                        *thought_overrides = std::mem::take(old);
+                    }
+                    (Row::Tool { expanded: old, .. }, Row::Tool { expanded, .. }) => {
+                        *expanded = *old;
+                    }
+                    (Row::Summary { expanded: old, .. }, Row::Summary { expanded, .. }) => {
+                        *expanded = *old;
+                    }
+                    _ => {}
+                }
+            }
+            let previous = self.rows.len();
+            self.list.splice(previous..previous, rows.len() - previous);
+            self.list.remeasure_items(0..previous);
+        } else {
+            self.list.reset(rows.len());
+        }
+        self.messages = messages;
+        self.running = running;
+        self.rows = rows;
+        true
+    }
+}
+
 #[derive(Default)]
 pub(super) struct Children {
     calls: HashMap<String, Value>,
@@ -39,8 +105,7 @@ pub(super) struct Children {
     inspection: Option<PendingInspection>,
     next_inspection: u64,
     children: Vec<Child>,
-    active: Option<usize>,
-    detail: Option<String>,
+    pub(super) active: Option<ChildTranscript>,
     read: Option<Task<()>>,
 }
 
@@ -309,6 +374,9 @@ impl Children {
             "",
         );
         child.running = !terminal(&row["state"]);
+        if let Some(file) = row["sessionFile"].as_str() {
+            child.file = Some(file.into());
+        }
         if child.running
             && let Some(progress) = row["progressText"].as_str()
         {
@@ -344,9 +412,13 @@ impl Children {
             return;
         };
         // 旧页面的回包可以晚于切页，不能写入当前记录。
-        if self.active != Some(inspection.child) {
+        let Some(active) = self
+            .active
+            .as_mut()
+            .filter(|active| active.index == inspection.child)
+        else {
             return;
-        }
+        };
         let child = &mut self.children[inspection.child];
         if let Some(task) = reply["task"].as_str()
             && child.task.is_empty()
@@ -356,27 +428,10 @@ impl Children {
         if terminal(&reply["status"]) {
             child.running = false;
         }
-        let text = reply["messages"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter_map(|message| {
-                let text = message["text"].as_str()?;
-                Some(format!(
-                    "{}\n{text}",
-                    message["role"].as_str().unwrap_or("message")
-                ))
-            })
-            .collect::<Vec<_>>()
-            .join("\n\n");
-        self.detail = if text.is_empty() {
-            reply["finalOutput"]
-                .as_str()
-                .filter(|text| !text.is_empty())
-                .map(str::to_owned)
-        } else {
-            Some(text)
-        };
+        let messages = inspection_messages(&reply);
+        if !messages.is_empty() {
+            active.update(messages, child.running);
+        }
     }
 
     pub(super) fn is_inspection_response(&mut self, record: &Value) -> bool {
@@ -456,12 +511,21 @@ impl Children {
 
     fn label(&self, index: usize) -> String {
         let child = &self.children[index];
-        let title = format!("#{} {}", index + 1, child.name);
-        if child.task.is_empty() {
-            title
+        let status = if child.running {
+            "In progress"
         } else {
-            format!("{title} · {}", sessions::one_line(&child.task, 46))
-        }
+            "Completed"
+        };
+        format!("#{} {} · {status}", index + 1, child.name)
+    }
+
+    fn active_index(&self) -> Option<usize> {
+        self.active.as_ref().map(|active| active.index)
+    }
+
+    pub(super) fn active_running(&self) -> bool {
+        self.active_index()
+            .is_some_and(|index| self.children[index].running)
     }
 
     pub(super) fn any_running(&self) -> bool {
@@ -529,7 +593,15 @@ impl ChatView {
             .map(|(index, child)| {
                 h_flex()
                     .flex_none()
-                    .child(self.child_button(index, cx))
+                    .min_w(px(0.))
+                    .max_w_full()
+                    .whitespace_nowrap()
+                    .child(
+                        div()
+                            .min_w(px(0.))
+                            .overflow_hidden()
+                            .child(self.child_button(index, cx)),
+                    )
                     .when(!child.running, |tab| {
                         tab.child(
                             IconButton::new(("hide-child", index), IconName::Close)
@@ -546,12 +618,15 @@ impl ChatView {
         (!tabs.is_empty()).then(|| {
             h_flex()
                 .id("child-task-tabs")
-                .overflow_x_scroll()
+                .w_full()
+                .flex_none()
+                .flex_wrap()
+                .content_start()
+                // 给输入框和消息区留出空间，避免大量标签撑满会话。
+                .max_h(px(120.))
+                .overflow_y_scroll()
                 .gap(px(6.))
-                .px(px(10.))
                 .py(px(4.))
-                .border_t_1()
-                .border_color(cx.theme().colors.border)
                 .children(tabs)
                 .into_any_element()
         })
@@ -559,13 +634,15 @@ impl ChatView {
 
     fn child_button(&self, index: usize, cx: &mut Context<Self>) -> Button {
         let child = &self.children.children[index];
-        Button::new(("child-task", index), self.children.label(index))
+        let label = SharedString::from(self.children.label(index));
+        Button::new(("child-task", index), label.clone())
+            .tooltip(Tooltip::text(label))
             .icon(if child.running {
                 IconName::LoadCircle
             } else {
                 IconName::Check
             })
-            .style(if self.children.active == Some(index) {
+            .style(if self.children.active_index() == Some(index) {
                 ButtonStyle::Tinted(TintColor::Accent)
             } else {
                 ButtonStyle::Subtle
@@ -577,11 +654,12 @@ impl ChatView {
     }
 
     fn open_child(&mut self, index: usize, cx: &mut Context<Self>) {
-        if self.children.active == Some(index) {
+        if self.children.active_index() == Some(index) {
             return;
         }
-        self.children.active = Some(index);
-        self.children.detail = None;
+        self.children.active = Some(ChildTranscript::new(index));
+        self.children.inspection = None;
+        self.log_viewer = None;
         self.selection
             .update(cx, |selection, cx| selection.clear(cx));
         self.children.read = Some(cx.spawn(async move |view, cx| {
@@ -596,21 +674,33 @@ impl ChatView {
                 }) else {
                     return;
                 };
-                let detail = cx
+                let messages = cx
                     .background_spawn(
                         async move { read_record(parent.as_deref()?, file.as_deref()?) },
                     )
                     .await;
                 let Ok(running) = view.update(cx, |this, cx| {
-                    if detail.is_some() || !is_async {
-                        if this.children.detail != detail {
-                            this.children.detail = detail;
+                    let Some(active) = this
+                        .children
+                        .active
+                        .as_mut()
+                        .filter(|active| active.index == index)
+                    else {
+                        return false;
+                    };
+                    let running = this.children.children[index].running;
+                    if let Some(messages) = messages {
+                        this.children.inspection = None;
+                        if active.update(messages, running) {
                             cx.notify();
                         }
-                    } else {
+                    } else if is_async && this.children.inspection.is_none() {
+                        if this.is_running() {
+                            return true;
+                        }
                         this.inspect_child(index);
                     }
-                    this.children.children[index].running
+                    running
                 }) else {
                     return;
                 };
@@ -666,7 +756,8 @@ impl ChatView {
     }
 
     pub(super) fn child_page(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let index = self.children.active?;
+        let active = self.children.active.as_ref()?;
+        let index = active.index;
         let child = &self.children.children[index];
         let colors = &cx.theme().colors;
         let text = |key: &'static str, text: &str| {
@@ -682,22 +773,26 @@ impl ChatView {
                     this.children.active = None;
                     this.children.read = None;
                     this.children.inspection = None;
+                    this.log_viewer = None;
                     this.selection.update(cx, |selection, cx| selection.clear(cx));
                     window.focus(&this.composer.read(cx).focus_handle(cx), cx);
                     cx.notify();
                 })))
                 .child(Label::new(self.children.label(index)).truncate()))
-            .child(v_flex().id(("child-record", index)).flex_1().overflow_y_scroll().gap(px(10.)).p(px(12.))
-                .when(!child.task.is_empty(), |page| page.child(text("task", &child.task)))
-                .when_some(self.children.detail.as_deref(), |page, detail| page.child(text("detail", detail)))
-                .when(self.children.detail.is_none(), |page| page
+            .child(if active.rows.is_empty() {
+                v_flex().id(("child-record", index)).flex_1().overflow_y_scroll().gap(px(10.)).p(px(12.))
+                    .when(!child.task.is_empty(), |page| page.child(text("task", &child.task)))
                     .child(Label::new(if child.running { "Waiting for readable child history…" } else { "Detailed child history is unavailable. It may have been cleaned up." }).color(Color::Muted))
-                    .when(!child.receipt.is_empty(), |page| page.child(text("receipt", &child.receipt)))))
+                    .when(!child.receipt.is_empty(), |page| page.child(text("receipt", &child.receipt)))
+                    .into_any_element()
+            } else {
+                self.render_transcript(&active.list, cx)
+            })
             .into_any_element())
     }
 }
 
-fn read_record(parent: &Path, file: &Path) -> Option<String> {
+fn read_record(parent: &Path, file: &Path) -> Option<Vec<Value>> {
     // 日志里的路径不可信，只允许读取对应父会话目录下的子记录。
     let expected = parent.with_extension("");
     let root = expected.canonicalize().ok()?;
@@ -735,21 +830,75 @@ fn read_record(parent: &Path, file: &Path) -> Option<String> {
         }
     }
     let mut messages = Vec::new();
-    while let Some(entry) = leaf.take().and_then(|id| entries.remove(&id)) {
+    while let Some(mut entry) = leaf.take().and_then(|id| entries.remove(&id)) {
         leaf = entry["parentId"].as_str().map(str::to_owned);
-        if entry["type"] == "message" {
-            let message = &entry["message"];
-            let text = sessions::message_text(message);
-            if !text.is_empty() {
-                messages.push(format!(
-                    "{}\n{text}",
-                    message["role"].as_str().unwrap_or("message")
-                ));
-            }
+        match entry["type"].as_str().unwrap_or_default() {
+            "message" => messages.push(entry["message"].take()),
+            "custom_message" => messages.push(json!({
+                "role": "custom", "content": entry["content"].take(), "display": entry["display"]
+            })),
+            "compaction" => messages.push(json!({
+                "role": "compactionSummary", "summary": entry["summary"], "tokensBefore": entry["tokensBefore"]
+            })),
+            "branch_summary" => messages.push(json!({
+                "role": "branchSummary", "summary": entry["summary"]
+            })),
+            _ => {}
         }
     }
     messages.reverse();
-    (!messages.is_empty()).then(|| messages.join("\n\n"))
+    (!messages.is_empty()).then_some(messages)
+}
+
+fn inspection_messages(reply: &Value) -> Vec<Value> {
+    let mut messages = Vec::new();
+    let mut calls = HashMap::<&str, std::collections::VecDeque<usize>>::new();
+    for (index, message) in reply["messages"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .enumerate()
+    {
+        let Some(text) = message["text"].as_str().filter(|text| !text.is_empty()) else {
+            continue;
+        };
+        let name = message["name"].as_str().unwrap_or("tool");
+        let content = json!([{"type": "text", "text": text}]);
+        match (message["kind"].as_str(), message["role"].as_str()) {
+            (Some("text"), Some(role @ ("user" | "assistant"))) => {
+                messages.push(json!({"role": role, "content": content}));
+            }
+            (Some("toolCall"), _) => {
+                // ADR-shortcut: 回包缺少调用 ID 时按同名工具的出现顺序配对，协议提供 ID 后改用 ID。
+                calls.entry(name).or_default().push_back(index);
+                let detail = text
+                    .strip_prefix(&format!("[tool: {name} "))
+                    .and_then(|text| text.strip_suffix(']'))
+                    .unwrap_or(text);
+                messages.push(json!({"role": "assistant", "content": [{
+                    "type": "toolCall", "id": index.to_string(), "name": name,
+                    "arguments": {"command": detail}
+                }]}));
+            }
+            (Some("toolResult"), _) => {
+                if let Some(call) = calls.get_mut(name).and_then(|calls| calls.pop_front()) {
+                    messages.push(json!({"role": "toolResult", "toolCallId": call.to_string(),
+                        "content": content, "isError": message["isError"]}));
+                } else {
+                    messages.push(json!({"role": "custom", "display": true, "content": content}));
+                }
+            }
+            _ => messages.push(json!({"role": "custom", "display": true, "content": content})),
+        }
+    }
+    if messages.is_empty()
+        && let Some(text) = reply["finalOutput"]
+            .as_str()
+            .filter(|text| !text.is_empty())
+    {
+        messages.push(json!({"role": "assistant", "content": [{"type": "text", "text": text}]}));
+    }
+    messages
 }
 
 #[cfg(test)]
@@ -775,6 +924,7 @@ mod tests {
         ])));
         assert_eq!(children.children.len(), 2);
         assert_eq!(children.children[1].key.child, "pear");
+        assert_eq!(children.label(1), "#2 worker · In progress");
     }
 
     #[test]
@@ -803,8 +953,7 @@ mod tests {
         let mut children = Children::default();
         children.child("a", "run-a", "run-a", "worker", "Apples");
         children.child("b", "run-b", "run-b", "worker", "Pears");
-        children.active = Some(1);
-        children.detail = Some("Pears only".into());
+        children.active = Some(ChildTranscript::new(1));
         children.inspection = Some(PendingInspection {
             child: 0,
             request: "a".into(),
@@ -814,7 +963,58 @@ mod tests {
         children.inspection_reply(
             &json!({"widgetLines":[format!("PI_SUBAGENT_INSPECT_JSON:{reply}")]}),
         );
-        assert_eq!(children.detail.as_deref(), Some("Pears only"));
+        assert!(children.active.unwrap().rows.is_empty());
+    }
+
+    #[test]
+    fn child_transcript_keeps_tool_details_open_when_results_arrive() {
+        let user = json!({"role":"user","content":"Inspect the project"});
+        let call = json!({"role":"assistant","content":[
+            {"type":"thinking","thinking":"Check the files first"},
+            {"type":"toolCall","id":"read-1","name":"read","arguments":{"path":"README.md"}}
+        ]});
+        let mut transcript = ChildTranscript::new(0);
+        assert!(transcript.update(vec![user.clone(), call.clone()], true));
+        let Row::Tool {
+            status: ToolStatus::Running,
+            expanded,
+            ..
+        } = &mut transcript.rows[2]
+        else {
+            panic!("expected an active tool call in the third row");
+        };
+        *expanded = Some(true);
+        let result = json!({"role":"toolResult","toolCallId":"read-1",
+            "content":[{"type":"text","text":"file output"}],
+            "details":{"fullOutputPath":"/tmp/untrusted.log"}});
+        let answer = json!({"role":"assistant","content":[{"type":"text","text":"**Read it.**"}]});
+        assert!(transcript.update(vec![user, call, result, answer], false));
+        assert!(matches!(&transcript.rows[0], Row::User { .. }));
+        assert!(
+            matches!(&transcript.rows[1], Row::Assistant { thinking, .. }
+            if thinking == &["Check the files first"])
+        );
+        assert!(matches!(&transcript.rows[2], Row::Tool {
+            status: ToolStatus::Done, expanded: Some(true), output, log, ..
+        } if output == "file output" && log.file.is_none()));
+        assert!(
+            matches!(&transcript.rows[3], Row::Assistant { text, .. } if text == "**Read it.**")
+        );
+        assert_eq!(transcript.list.item_count(), 4);
+    }
+
+    #[test]
+    fn inspection_previews_reuse_user_assistant_and_tool_rows() {
+        let reply = json!({"messages":[
+            {"role":"user","kind":"text","text":"Check the files"},
+            {"role":"assistant","kind":"toolCall","name":"read","text":"[tool: read README.md]"},
+            {"role":"toolResult","kind":"toolResult","name":"read","text":"missing file","isError":true},
+            {"role":"assistant","kind":"text","text":"**No file.**"}
+        ]});
+        let rows = history_rows(&inspection_messages(&reply), false);
+        assert!(matches!(&rows[..], [Row::User { .. }, Row::Tool {
+            status: ToolStatus::Failed, detail, output, ..
+        }, Row::Assistant { text, .. }] if detail == "README.md" && output == "missing file" && text == "**No file.**"));
     }
 
     #[test]
@@ -829,8 +1029,10 @@ mod tests {
         }
         let mut children = Children::default();
         children.restore(&messages);
-        assert_eq!(children.label(0), "#1 worker · Find apples");
-        assert_eq!(children.label(1), "#2 worker · Find pears");
+        assert_eq!(children.label(0), "#1 worker · Completed");
+        assert_eq!(children.label(1), "#2 worker · Completed");
+        assert_eq!(children.children[0].task, "Find apples");
+        assert_eq!(children.children[1].task, "Find pears");
         assert_eq!(children.children[0].receipt.as_ref(), "Found apples");
         assert_eq!(children.children[1].receipt.as_ref(), "Found pears");
         assert!(
