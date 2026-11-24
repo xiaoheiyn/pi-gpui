@@ -7,7 +7,6 @@
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::Arc;
 
 use futures::channel::{mpsc, oneshot};
@@ -926,7 +925,7 @@ impl PluginRegistry {
             return;
         };
         let spawned = resolved.and_then(|(program, args)| {
-            let mut command = Command::new(&program);
+            let mut command = crate::platform::background_command(&program);
             command
                 .args(&args)
                 .current_dir(&plugin.dir)

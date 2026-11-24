@@ -1,7 +1,4 @@
-#![cfg_attr(
-    all(target_os = "windows", not(debug_assertions)),
-    windows_subsystem = "windows"
-)]
+#![cfg_attr(windows, windows_subsystem = "windows")]
 
 mod attachments;
 #[cfg(all(debug_assertions, target_os = "macos"))]

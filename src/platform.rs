@@ -12,6 +12,21 @@ pub use std::fs::canonicalize;
 #[cfg(not(windows))]
 use gpui::Window;
 
+pub fn background_command(program: impl AsRef<std::ffi::OsStr>) -> std::process::Command {
+    let command = std::process::Command::new(program);
+    #[cfg(windows)]
+    let command = {
+        use std::os::windows::process::CommandExt as _;
+        use windows_sys::Win32::System::Threading::CREATE_NO_WINDOW;
+
+        // 图形应用的子进程不会继承控制台，需阻止系统为它另开窗口。
+        let mut command = command;
+        command.creation_flags(CREATE_NO_WINDOW);
+        command
+    };
+    command
+}
+
 /// Starts dragging the window from our custom title bar.
 ///
 /// Call it on the first mouse move after a mouse down in the title bar, like

@@ -231,14 +231,8 @@ pub fn find_executable(name: &str) -> Option<PathBuf> {
 }
 
 pub fn pi_command(executable: &Path) -> Command {
-    let mut command = Command::new(executable);
+    let mut command = crate::platform::background_command(executable);
     command.env("PATH", path_with_executable_dir(executable));
-    #[cfg(target_os = "windows")]
-    {
-        use std::os::windows::process::CommandExt as _;
-        use windows_sys::Win32::System::Threading::CREATE_NO_WINDOW;
-        command.creation_flags(CREATE_NO_WINDOW);
-    }
     command
 }
 

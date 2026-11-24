@@ -6,7 +6,7 @@ use std::collections::HashSet;
 use std::fs;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 
 use gpui::{
     AnyElement, Context, ElementId, FontWeight, HighlightStyle, Hsla, StyledText, Task, Window,
@@ -531,7 +531,7 @@ impl GitError {
 }
 
 fn git(directory: &Path, arguments: &[&str]) -> Result<String, GitError> {
-    let output = Command::new("git")
+    let output = crate::platform::background_command("git")
         .arg("-C")
         .arg(directory)
         .args(arguments)

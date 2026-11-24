@@ -5,7 +5,7 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 
 use gpui::{
     AnyElement, ClickEvent, Context, EventEmitter, FocusHandle, KeyBinding, MouseButton,
@@ -690,7 +690,7 @@ fn read_directory(directory: &Path) -> Result<Vec<Entry>, String> {
 /// Empty outside a git work tree or when git is missing.
 fn git_state(workspace: &Path) -> GitState {
     let run = |arguments: &[&str]| -> Option<Vec<u8>> {
-        let output = Command::new("git")
+        let output = crate::platform::background_command("git")
             .arg("-C")
             .arg(workspace)
             .args(arguments)

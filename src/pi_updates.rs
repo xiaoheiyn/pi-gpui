@@ -7,7 +7,6 @@
 //! until an app release supports it.
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use serde_json::Value;
 
@@ -149,7 +148,7 @@ fn package_version(path: &Path) -> Option<String> {
 }
 
 fn latest_version(name: &str) -> Option<String> {
-    let output = Command::new("curl")
+    let output = crate::platform::background_command("curl")
         .args(["-fsSL", "--max-time", "15"])
         .arg(format!("https://registry.npmjs.org/{name}/latest"))
         .output()
