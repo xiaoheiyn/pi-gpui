@@ -75,8 +75,7 @@ impl ButtonStyle {
                 active: colors.ghost_element_active,
                 border: Some(colors.border),
             },
-            // Themes define status backgrounds as opaque (Ayu) or translucent
-            // (One Dark); mixing in the accent works for both.
+            // 混入强调色，让状态底色与普通按钮有区分。
             ButtonStyle::Tinted(TintColor::Accent) => StyleColors {
                 background: colors.info_background,
                 hover: colors.info_background.blend(colors.info.opacity(0.15)),

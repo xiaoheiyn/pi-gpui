@@ -7,16 +7,14 @@
 use std::path::PathBuf;
 use std::time::{Duration, SystemTime};
 
-use gpui::{App, Global, SharedString, Task};
+use gpui::{App, Global, SharedString, Task, WindowAppearance};
 use serde_json::Value;
 
-use crate::platform;
 use crate::ui::Theme;
-use crate::ui::user_theme::{self, UserTheme};
 
 pub const THEME_SYSTEM: &str = "system";
-pub const THEME_DARK: &str = "Ayu Dark";
-pub const THEME_LIGHT: &str = "Ayu Light";
+pub const THEME_DARK: &str = "Dracula";
+pub const THEME_LIGHT: &str = "Dracula Light";
 const DEFAULT_BUFFER_FONT: &str = "JetBrains Mono NL";
 /// Ships with macOS; used when the configured code font is missing.
 const FALLBACK_BUFFER_FONT: &str = "Menlo";
@@ -28,9 +26,8 @@ const DEFAULT_FILE: &str = r#"// Pi GPUI settings.
 // saved, and the Settings page (⌘, or Ctrl+,) writes here too.
 // Comments and trailing commas are allowed.
 {
-  // "system" follows the system light or dark mode, or pick a theme: "Ayu Dark",
-  // "Ayu Light", or the name of one of your themes (JSON files in the themes
-  // folder next to this file; the Settings page can create one).
+  // "system" follows the system appearance. Pick "Dracula" for dark mode
+  // or "Dracula Light" for light mode.
   "theme": "system",
 
   // Font of the interface. ".SystemUIFont" is the system font.
@@ -97,12 +94,23 @@ impl Settings {
                 .unwrap_or(fallback)
         };
         Self {
-            // Any name: custom themes are looked up when the theme is applied.
-            theme: value["theme"]
-                .as_str()
-                .map(str::trim)
-                .filter(|theme| !theme.is_empty())
-                .map_or(defaults.theme, str::to_string),
+            // 旧配置中的显式深浅模式在升级后仍然有效。
+            theme: match value["theme"].as_str().unwrap_or_default().trim() {
+                "Ayu Dark" => THEME_DARK,
+                "Ayu Light" => THEME_LIGHT,
+                name if name.eq_ignore_ascii_case(THEME_DARK)
+                    || name.eq_ignore_ascii_case("Dracula Solid") =>
+                {
+                    THEME_DARK
+                }
+                name if name.eq_ignore_ascii_case(THEME_LIGHT)
+                    || name.eq_ignore_ascii_case("Dracula Light (Alucard)") =>
+                {
+                    THEME_LIGHT
+                }
+                _ => THEME_SYSTEM,
+            }
+            .to_string(),
             ui_font_family: text("ui_font_family", defaults.ui_font_family),
             agent_font_size: size("agent_font_size", defaults.agent_font_size),
             buffer_font_family: text("buffer_font_family", defaults.buffer_font_family),
@@ -138,81 +146,6 @@ pub struct SettingsFile {
 }
 
 impl Global for SettingsFile {}
-
-/// Custom themes from the themes folder, read again when a file in it changes.
-pub struct UserThemes {
-    pub directory: PathBuf,
-    pub themes: Vec<UserTheme>,
-    /// Files that could not be read as themes.
-    pub errors: Vec<String>,
-    /// Why the theme in the settings is not shown (e.g. no such theme).
-    pub theme_error: Option<String>,
-    /// File names and modification times at the last read.
-    stamp: Vec<(PathBuf, Option<SystemTime>)>,
-}
-
-impl Global for UserThemes {}
-
-impl UserThemes {
-    fn stamp(directory: &std::path::Path) -> Vec<(PathBuf, Option<SystemTime>)> {
-        let mut stamp: Vec<_> = std::fs::read_dir(directory)
-            .into_iter()
-            .flatten()
-            .flatten()
-            .map(|entry| {
-                let modified = entry.metadata().and_then(|meta| meta.modified()).ok();
-                (entry.path(), modified)
-            })
-            .collect();
-        stamp.sort();
-        stamp
-    }
-
-    /// Reads the folder again if anything in it changed; true when it did.
-    fn refresh(&mut self) -> bool {
-        let stamp = Self::stamp(&self.directory);
-        if stamp == self.stamp {
-            return false;
-        }
-        self.stamp = stamp;
-        (self.themes, self.errors) = user_theme::load_dir(&self.directory);
-        for error in &self.errors {
-            eprintln!("pi-gpui: theme not loaded: {error}");
-        }
-        true
-    }
-}
-
-pub fn themes_directory() -> PathBuf {
-    crate::sessions::app_data_directory()
-        .unwrap_or_default()
-        .join("themes")
-}
-
-/// Writes a new theme file from the template; returns its path and name.
-pub fn create_theme_file() -> Result<(PathBuf, String), String> {
-    let directory = themes_directory();
-    std::fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
-    let path = (1..)
-        .map(|number| {
-            directory.join(if number == 1 {
-                "my-theme.json".to_string()
-            } else {
-                format!("my-theme-{number}.json")
-            })
-        })
-        .find(|path| !path.exists())
-        .unwrap_or_default();
-    let name = path
-        .file_stem()
-        .unwrap_or_default()
-        .to_string_lossy()
-        .replace("my-theme", "My Theme")
-        .replace('-', " ");
-    let text = user_theme::TEMPLATE.replace("\"My Theme\"", &format!("\"{name}\""));
-    std::fs::write(&path, text).map_err(|error| error.to_string())?;
-    Ok((path, name))
-}
 
 pub fn path() -> PathBuf {
     crate::sessions::app_data_directory()
@@ -267,24 +200,11 @@ pub fn init(cx: &mut App) {
         modified: None,
         _watch: watch,
     });
-    let mut themes = UserThemes {
-        directory: themes_directory(),
-        themes: Vec::new(),
-        errors: Vec::new(),
-        theme_error: None,
-        stamp: Vec::new(),
-    };
-    themes.refresh();
-    cx.set_global(themes);
     reload_if_changed(cx);
     apply_theme(cx);
 }
 
 fn reload_if_changed(cx: &mut App) {
-    // A changed theme file shows at once when it is the theme in use.
-    if cx.global_mut::<UserThemes>().refresh() {
-        apply_theme(cx);
-    }
     let file = cx.global::<SettingsFile>();
     let modified = std::fs::metadata(&file.path)
         .and_then(|metadata| metadata.modified())
@@ -331,42 +251,37 @@ fn reload_if_changed(cx: &mut App) {
     cx.refresh_windows();
 }
 
-/// Sets the theme global from the setting and the macOS appearance.
-pub fn apply_theme(cx: &mut App) {
-    apply_theme_for(cx.window_appearance(), cx);
+fn apply_theme(cx: &mut App) {
+    let override_appearance = match Settings::get(cx).theme.as_str() {
+        THEME_DARK => Some(WindowAppearance::Dark),
+        THEME_LIGHT => Some(WindowAppearance::Light),
+        _ => None,
+    };
+    // 回到系统模式时，原生窗口必须解除手动覆盖才能继续接收系统变化。
+    cx.set_window_appearance(override_appearance);
+    apply_theme_for(
+        override_appearance.unwrap_or_else(|| cx.window_appearance()),
+        cx,
+    );
 }
 
-/// Inside `observe_window_appearance` pass `window.appearance()`: asking the
-/// platform again from that callback panics on X11 (its client is borrowed).
-pub fn apply_theme_for(appearance: gpui::WindowAppearance, cx: &mut App) {
-    let system_is_dark = matches!(
-        appearance,
-        gpui::WindowAppearance::Dark | gpui::WindowAppearance::VibrantDark
-    );
-    let name = Settings::get(cx).theme.clone();
-    let mut theme_error = None;
-    let theme = match name.as_str() {
-        THEME_SYSTEM => Theme::ayu(system_is_dark),
-        THEME_DARK => Theme::ayu(true),
-        THEME_LIGHT => Theme::ayu(false),
-        name => match cx
-            .global::<UserThemes>()
-            .themes
-            .iter()
-            .find(|theme| theme.name.eq_ignore_ascii_case(name))
-        {
-            Some(theme) => theme.theme(),
-            None => {
-                theme_error = Some(format!(
-                    "No theme \"{name}\" in the themes folder; following the system appearance."
-                ));
-                Theme::ayu(system_is_dark)
-            }
-        },
+// X11 在外观回调期间借用了平台状态，所以由调用方传入窗口外观。
+pub fn apply_theme_for(appearance: WindowAppearance, cx: &mut App) {
+    let dark = match Settings::get(cx).theme.as_str() {
+        THEME_DARK => true,
+        THEME_LIGHT => false,
+        _ => matches!(
+            appearance,
+            WindowAppearance::Dark | WindowAppearance::VibrantDark
+        ),
     };
-    cx.global_mut::<UserThemes>().theme_error = theme_error;
-    platform::set_app_appearance(theme.is_dark());
-    cx.set_global(theme);
+    if cx
+        .try_global::<Theme>()
+        .is_some_and(|theme| theme.is_dark() == dark)
+    {
+        return;
+    }
+    cx.set_global(Theme::dracula(dark));
     cx.refresh_windows();
 }
 
@@ -593,9 +508,9 @@ mod tests {
 
     #[test]
     fn setting_a_value_keeps_comments_and_other_keys() {
-        let updated = set_top_level_value(DEFAULT_FILE, "theme", &json!("Ayu Light"));
-        assert!(updated.contains(r#""theme": "Ayu Light""#));
-        assert!(updated.contains("// \"system\" follows the system"));
+        let updated = set_top_level_value(DEFAULT_FILE, "theme", &json!(THEME_LIGHT));
+        assert!(updated.contains(r#""theme": "Dracula Light""#));
+        assert!(updated.contains("// Text size of messages and answers"));
         assert_eq!(parse(&updated).unwrap().theme, THEME_LIGHT);
 
         let sized = set_top_level_value(&updated, "agent_font_size", &json!(16));
@@ -604,11 +519,25 @@ mod tests {
     }
 
     #[test]
+    fn previous_theme_choices_resolve_to_the_supported_appearance() {
+        for (old, expected) in [
+            ("Ayu Dark", THEME_DARK),
+            ("Ayu Light", THEME_LIGHT),
+            ("Dracula Solid", THEME_DARK),
+            ("dracula light (alucard)", THEME_LIGHT),
+            ("My Theme", THEME_SYSTEM),
+        ] {
+            let settings = Settings::from_json(&json!({"theme": old}));
+            assert_eq!(settings.theme, expected, "theme: {old}");
+        }
+    }
+
+    #[test]
     fn missing_keys_are_added_and_nested_keys_ignored() {
         let text = "{\n  // note\n  \"nested\": { \"theme\": \"x\" }\n}\n";
-        let updated = set_top_level_value(text, "theme", &json!("Ayu Dark"));
+        let updated = set_top_level_value(text, "theme", &json!(THEME_DARK));
         let value: Value = serde_json::from_str(&strip_jsonc(&updated)).unwrap();
-        assert_eq!(value["theme"], "Ayu Dark");
+        assert_eq!(value["theme"], THEME_DARK);
         assert_eq!(value["nested"]["theme"], "x");
         assert!(updated.contains("// note"));
     }

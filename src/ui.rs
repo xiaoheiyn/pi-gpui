@@ -10,9 +10,7 @@ mod button;
 mod icon;
 mod label;
 mod list_item;
-pub mod pi_gui_theme;
 mod theme;
-pub mod user_theme;
 
 pub use animation::AnimationTicker;
 pub use button::{Button, ButtonSize, ButtonStyle, IconButton, TintColor};

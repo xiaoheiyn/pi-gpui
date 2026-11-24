@@ -54,40 +54,6 @@ pub fn start_window_drag(window: &Window) {
     window.start_window_move();
 }
 
-/// Tells macOS whether the app looks dark or light, so system-drawn parts
-/// (traffic lights, menus, scroll bars, permission sheets) and other apps
-/// asking for our appearance match the theme instead of the system setting.
-#[cfg(target_os = "macos")]
-pub fn set_app_appearance(dark: bool) {
-    use std::ffi::CString;
-
-    use objc::runtime::Object;
-    use objc::{class, msg_send, sel, sel_impl};
-
-    let name = if dark {
-        "NSAppearanceNameDarkAqua"
-    } else {
-        "NSAppearanceNameAqua"
-    };
-    let Ok(name) = CString::new(name) else {
-        return;
-    };
-    // SAFETY: called on the main thread after AppKit finished launching; all
-    // messages are standard AppKit API and null results are checked.
-    unsafe {
-        let name: *mut Object = msg_send![class!(NSString), stringWithUTF8String: name.as_ptr()];
-        let appearance: *mut Object = msg_send![class!(NSAppearance), appearanceNamed: name];
-        if appearance.is_null() {
-            return;
-        }
-        let app: *mut Object = msg_send![class!(NSApplication), sharedApplication];
-        let _: () = msg_send![app, setAppearance: appearance];
-    }
-}
-
-#[cfg(not(target_os = "macos"))]
-pub fn set_app_appearance(_dark: bool) {}
-
 /// Moves a file to the Trash, so a deleted session can still be restored.
 #[cfg(target_os = "macos")]
 pub fn move_to_trash(path: &std::path::Path) -> Result<(), String> {

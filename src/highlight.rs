@@ -190,7 +190,7 @@ mod tests {
 
     #[test]
     fn rust_keywords_strings_and_comments_get_colors() {
-        let colors = SyntaxColors::github_dark();
+        let colors = crate::ui::Theme::dracula(false).colors.syntax;
         let code = "// note\nfn main() { let s = \"hi\"; }\n";
         let highlights = highlight(code, Some("rust"), &colors).expect("rust is known");
         let colored = |needle: &str| {

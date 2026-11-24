@@ -743,7 +743,7 @@ mod tests {
             },
         ];
         let texts: Vec<String> = lines.iter().map(|line| line.text.clone()).collect();
-        let colors = crate::ui::Theme::ayu(true).colors.syntax;
+        let colors = crate::ui::Theme::dracula(true).colors.syntax;
         let spans = line_highlights("src/main.rs", &lines, &texts, &colors);
         assert!(spans[0].is_empty(), "hunk headers stay plain");
         for (spans, text) in spans.iter().zip(&texts).skip(1) {

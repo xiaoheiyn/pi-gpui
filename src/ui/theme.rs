@@ -1,4 +1,4 @@
-use gpui::{App, Global, Hsla, SharedString, rgba};
+use gpui::{App, Global, Hsla, rgba};
 
 /// Semantic color tokens, named after Zed's theme schema so components read
 /// the same way as Zed's `ui` crate.
@@ -41,8 +41,7 @@ pub struct ThemeColors {
     pub syntax: SyntaxColors,
 }
 
-/// Code colors, one per scope group (see `highlight.rs`). The palettes are
-/// the syntax themes pi-gui pairs with each preset.
+/// Code colors, one per scope group (see `highlight.rs`).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SyntaxColors {
     pub comment: Hsla,
@@ -60,254 +59,121 @@ pub struct SyntaxColors {
     pub attribute: Hsla,
 }
 
-impl SyntaxColors {
-    #[allow(clippy::too_many_arguments)]
-    const fn palette(
-        comment: u32,
-        keyword: u32,
-        string: u32,
-        number: u32,
-        function: u32,
-        r#type: u32,
-        constant: u32,
-        operator: u32,
-        punctuation: Option<u32>,
-        property: u32,
-        tag: u32,
-        attribute: u32,
-    ) -> [Option<u32>; 12] {
-        [
-            Some(comment),
-            Some(keyword),
-            Some(string),
-            Some(number),
-            Some(function),
-            Some(r#type),
-            Some(constant),
-            Some(operator),
-            punctuation,
-            Some(property),
-            Some(tag),
-            Some(attribute),
-        ]
-    }
-
-    fn from_palette(palette: [Option<u32>; 12]) -> Self {
-        let color = |index: usize| hex((palette[index].unwrap_or(0) << 8) | 0xff);
-        Self {
-            comment: color(0),
-            keyword: color(1),
-            string: color(2),
-            number: color(3),
-            function: color(4),
-            r#type: color(5),
-            constant: color(6),
-            operator: color(7),
-            punctuation: palette[8].map(|value| hex((value << 8) | 0xff)),
-            property: color(9),
-            tag: color(10),
-            attribute: color(11),
-        }
-    }
-
-    /// GitHub Dark Default.
-    pub fn github_dark() -> Self {
-        Self::from_palette(Self::palette(
-            0x8b949e, 0xff7b72, 0xa5d6ff, 0x79c0ff, 0xd2a8ff, 0xffa657, 0x79c0ff, 0xff7b72, None,
-            0x79c0ff, 0x7ee787, 0x79c0ff,
-        ))
-    }
-
-    /// GitHub Light Default.
-    pub fn github_light() -> Self {
-        Self::from_palette(Self::palette(
-            0x6e7781, 0xcf222e, 0x0a3069, 0x0550ae, 0x8250df, 0x953800, 0x0550ae, 0xcf222e, None,
-            0x0550ae, 0x116329, 0x0550ae,
-        ))
-    }
-
-    /// The syntax theme pi-gui uses for a preset and variant.
-    pub fn for_pi_gui_preset(preset: &str, dark: bool) -> Self {
-        let palette = match (preset, dark) {
-            ("vscode", true) => Self::palette(
-                0x6a9955, 0x569cd6, 0xce9178, 0xb5cea8, 0xdcdcaa, 0x4ec9b0, 0x569cd6, 0xd4d4d4,
-                None, 0x9cdcfe, 0x569cd6, 0x9cdcfe,
-            ),
-            ("vscode", false) => Self::palette(
-                0x008000, 0x0000ff, 0xa31515, 0x098658, 0x795e26, 0x267f99, 0x0000ff, 0x000000,
-                None, 0x001080, 0x800000, 0xe50000,
-            ),
-            ("catppuccin", true) => Self::palette(
-                0x9399b2,
-                0xcba6f7,
-                0xa6e3a1,
-                0xfab387,
-                0x89b4fa,
-                0xf9e2af,
-                0xfab387,
-                0x94e2d5,
-                Some(0x9399b2),
-                0xb4befe,
-                0xcba6f7,
-                0xf9e2af,
-            ),
-            ("catppuccin", false) => Self::palette(
-                0x7c7f93,
-                0x8839ef,
-                0x40a02b,
-                0xfe640b,
-                0x1e66f5,
-                0xdf8e1d,
-                0xfe640b,
-                0x179299,
-                Some(0x7c7f93),
-                0x7287fd,
-                0x8839ef,
-                0xdf8e1d,
-            ),
-            ("tokyo-night", true) => Self::palette(
-                0x565f89,
-                0xbb9af7,
-                0x9ece6a,
-                0xff9e64,
-                0x7aa2f7,
-                0x2ac3de,
-                0xff9e64,
-                0x89ddff,
-                Some(0x89ddff),
-                0x73daca,
-                0xf7768e,
-                0xbb9af7,
-            ),
-            ("nord", true) => Self::palette(
-                0x616e88, 0x81a1c1, 0xa3be8c, 0xb48ead, 0x88c0d0, 0x8fbcbb, 0x81a1c1, 0x81a1c1,
-                None, 0xd8dee9, 0x81a1c1, 0x8fbcbb,
-            ),
-            ("dracula", true) => Self::palette(
-                0x6272a4, 0xff79c6, 0xf1fa8c, 0xbd93f9, 0x50fa7b, 0x8be9fd, 0xbd93f9, 0xff79c6,
-                None, 0x66d9ef, 0xff79c6, 0x50fa7b,
-            ),
-            ("gruvbox", true) => Self::palette(
-                0x928374, 0xfb4934, 0xb8bb26, 0xd3869b, 0xfabd2f, 0xfabd2f, 0xd3869b, 0x8ec07c,
-                None, 0x83a598, 0x8ec07c, 0xfabd2f,
-            ),
-            // default, github and ayu use GitHub's themes, as do the light
-            // variants without a palette here.
-            (_, true) => return Self::github_dark(),
-            (_, false) => return Self::github_light(),
-        };
-        Self::from_palette(palette)
-    }
-}
-
 pub struct Theme {
-    pub name: SharedString,
     pub colors: ThemeColors,
 }
 
 impl Global for Theme {}
 
 impl Theme {
-    /// Dark themes have a dark editor background.
     pub fn is_dark(&self) -> bool {
         self.colors.editor_background.l < 0.5
     }
-}
 
-impl Theme {
-    /// The built-in Ayu themes, derived the way pi-gui derives its Ayu preset.
-    pub fn ayu(dark: bool) -> Self {
-        let mut theme = super::pi_gui_theme::theme("ayu", dark);
-        theme.name = SharedString::new_static(if dark { "Ayu Dark" } else { "Ayu Light" });
-        theme
-    }
-
-    /// Values from Zed's bundled "Ayu Dark" theme (assets/themes/ayu/ayu.json,
-    /// MIT, Copyright (c) 2016 Ike Ku).
-    pub fn ayu_dark() -> Self {
-        Self {
-            name: SharedString::new_static("Ayu Dark"),
-            colors: ThemeColors {
-                title_bar_background: hex(0x313337ff),
-                title_bar_inactive_background: hex(0x1f2127ff),
-                panel_background: hex(0x1f2127ff),
-                editor_background: hex(0x0d1016ff),
-                elevated_surface_background: hex(0x1f2127ff),
-                element_background: hex(0x1f2127ff),
-                element_hover: hex(0x2d2f34ff),
-                element_active: hex(0x3e4043ff),
-                element_selected: hex(0x3e4043ff),
-                ghost_element_hover: hex(0x2d2f34ff),
-                ghost_element_active: hex(0x3e4043ff),
-                ghost_element_selected: hex(0x3e4043ff),
-                border: hex(0x3f4043ff),
-                border_variant: hex(0x2d2f34ff),
-                border_focused: hex(0x1b4a6eff),
-                text: hex(0xbfbdb6ff),
-                text_muted: hex(0x8a8986ff),
-                text_placeholder: hex(0x696a6aff),
-                text_disabled: hex(0x696a6aff),
-                text_accent: hex(0x5ac1feff),
-                icon: hex(0xbfbdb6ff),
-                icon_muted: hex(0x8a8986ff),
-                icon_disabled: hex(0x696a6aff),
-                icon_accent: hex(0x5ac1feff),
-                error: hex(0xef7177ff),
-                error_background: hex(0x48161bff),
-                warning: hex(0xfeb454ff),
-                warning_background: hex(0x572815ff),
-                success: hex(0xaad84cff),
-                success_background: hex(0x294113ff),
-                info: hex(0x5ac1feff),
-                info_background: hex(0x0d2f4eff),
-                code_block_background: hex(0x0d1016ff),
-                syntax: SyntaxColors::github_dark(),
-            },
-        }
-    }
-
-    /// Values from Zed's bundled "One Dark" theme (assets/themes/one/one.json,
-    /// MIT, Copyright (c) 2014 GitHub Inc.).
-    pub fn one_dark() -> Self {
-        Self {
-            name: SharedString::new_static("One Dark"),
-            colors: ThemeColors {
-                title_bar_background: hex(0x3b414dff),
-                title_bar_inactive_background: hex(0x2e343eff),
-                panel_background: hex(0x2f343eff),
-                editor_background: hex(0x282c33ff),
-                elevated_surface_background: hex(0x2f343eff),
-                element_background: hex(0x2e343eff),
-                element_hover: hex(0x363c46ff),
-                element_active: hex(0x454a56ff),
-                element_selected: hex(0x454a56ff),
-                ghost_element_hover: hex(0x363c46ff),
-                ghost_element_active: hex(0x454a56ff),
-                ghost_element_selected: hex(0x454a56ff),
-                border: hex(0x464b57ff),
-                border_variant: hex(0x363c46ff),
-                border_focused: hex(0x47679eff),
-                text: hex(0xdce0e5ff),
-                text_muted: hex(0xa9afbcff),
-                text_placeholder: hex(0x878a98ff),
-                text_disabled: hex(0x878a98ff),
-                text_accent: hex(0x74ade8ff),
-                icon: hex(0xdce0e5ff),
-                icon_muted: hex(0xa9afbcff),
-                icon_disabled: hex(0x878a98ff),
-                icon_accent: hex(0x74ade8ff),
-                error: hex(0xd07277ff),
-                error_background: hex(0xd0727726),
-                warning: hex(0xdec184ff),
-                warning_background: hex(0xdec18426),
-                success: hex(0xa1c181ff),
-                success_background: hex(0xa1c18126),
-                info: hex(0x74ade8ff),
-                info_background: hex(0x74ade826),
-                code_block_background: hex(0x282c33ff),
-                syntax: SyntaxColors::github_dark(),
-            },
-        }
+    // 固定导入后的实际配色，避免颜色派生规则变化。来源：https://github.com/dracula/zed
+    pub fn dracula(dark: bool) -> Self {
+        let colors = if dark {
+            ThemeColors {
+                title_bar_background: hex(0x141119bb),
+                title_bar_inactive_background: hex(0x0a080cbb),
+                panel_background: hex(0x16121bff),
+                editor_background: hex(0x282a36ff),
+                elevated_surface_background: hex(0x1e1925ff),
+                element_background: hex(0x1c1d26ff),
+                element_hover: hex(0x3c324bff),
+                element_active: hex(0x796595ff),
+                element_selected: hex(0x282232ff),
+                ghost_element_hover: hex(0xc9a8f935),
+                ghost_element_active: hex(0xc9a8f950),
+                ghost_element_selected: hex(0xc9a8f925),
+                border: hex(0x3c324bcc),
+                border_variant: hex(0xc9a8f933),
+                border_focused: hex(0xc9a8f977),
+                text: hex(0xf8f8f2ff),
+                text_muted: hex(0xa186c7ff),
+                text_placeholder: hex(0xc9a8f980),
+                text_disabled: hex(0xc9a8f950),
+                text_accent: hex(0xc9a8f9ff),
+                icon: hex(0xf8f8f2ff),
+                icon_muted: hex(0xf8f8f270),
+                icon_disabled: hex(0xf8f8f240),
+                icon_accent: hex(0xc9a8f9ff),
+                error: hex(0xe67373ff),
+                error_background: hex(0x242631ee),
+                warning: hex(0xe6e373ff),
+                warning_background: hex(0x242631ee),
+                success: hex(0x79e96dff),
+                success_background: hex(0x242631ee),
+                info: hex(0x73ece5ff),
+                info_background: hex(0x242631ee),
+                code_block_background: hex(0x000000ff).opacity(0.25),
+                syntax: SyntaxColors {
+                    comment: hex(0x6272a4ff),
+                    keyword: hex(0xff79c6ff),
+                    string: hex(0xf1fa8cff),
+                    number: hex(0xbd93f9ff),
+                    function: hex(0x50fa7bff),
+                    r#type: hex(0x8be9fdff),
+                    constant: hex(0xbd93f9ff),
+                    operator: hex(0xff79c6ff),
+                    property: hex(0x8be9fdff),
+                    tag: hex(0xff79c6ff),
+                    attribute: hex(0x8be9fdff),
+                    punctuation: Some(hex(0xff79c6ff)),
+                },
+            }
+        } else {
+            ThemeColors {
+                title_bar_background: hex(0xfefefeff),
+                title_bar_inactive_background: hex(0xf0f0f0ff),
+                panel_background: hex(0xedeff4ff),
+                editor_background: hex(0xf5f5f5ff),
+                elevated_surface_background: hex(0xf6f6f6ff),
+                element_background: hex(0xdce0e8ff),
+                element_hover: hex(0xccd0daff),
+                element_active: hex(0xd6d9e1ff),
+                element_selected: hex(0xcfcfdeff),
+                ghost_element_hover: hex(0xccd0daff),
+                ghost_element_active: hex(0xd6d9e1ff),
+                ghost_element_selected: hex(0xdce0e8ff),
+                border: hex(0xd1c9efff),
+                border_variant: hex(0xe4e4e4ff),
+                border_focused: hex(0xf5f5f577),
+                text: hex(0x1f1f1fff),
+                text_muted: hex(0x353535ff),
+                text_placeholder: hex(0x1f1f1f80),
+                text_disabled: hex(0x1f1f1f70),
+                text_accent: hex(0x836ed4ff),
+                icon: hex(0x1f1f1fff),
+                icon_muted: hex(0x1f1f1f70),
+                icon_disabled: hex(0x1f1f1f40),
+                icon_accent: hex(0x836ed4ff),
+                error: hex(0xb83233ff),
+                error_background: hex(0xddddddee),
+                warning: hex(0xccb517ff),
+                warning_background: hex(0xf0f0f0ee),
+                success: hex(0x1b7108ff),
+                success_background: hex(0xf0f0f0ee),
+                info: hex(0x0067a1ff),
+                info_background: hex(0xf0f0f0ee),
+                code_block_background: hex(0xeeeeeeff),
+                syntax: SyntaxColors {
+                    comment: hex(0x635d97ff),
+                    keyword: hex(0xa3144dff),
+                    string: hex(0x846e15ff),
+                    number: hex(0x644ac9ff),
+                    function: hex(0x14710aff),
+                    r#type: hex(0x036a96ff),
+                    constant: hex(0x644ac9ff),
+                    operator: hex(0xa3144dff),
+                    property: hex(0x036a96ff),
+                    tag: hex(0xa3144dff),
+                    attribute: hex(0x036a96ff),
+                    punctuation: Some(hex(0xa3144dff)),
+                },
+            }
+        };
+        Self { colors }
     }
 }
 

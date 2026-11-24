@@ -1,6 +1,3 @@
-/* Pi GPUI site. Colors are the app's Ayu Dark theme, fonts are the app's:
-   the macOS system font for text and JetBrains Mono NL for code. */
-
 @font-face {
   font-family: "JetBrains Mono NL";
   src: url("/fonts/JetBrainsMonoNL-Regular.woff2") format("woff2");
