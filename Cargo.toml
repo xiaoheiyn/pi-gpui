@@ -39,7 +39,7 @@ gpui_platform = { package = "gpui-fast-platform", version = "=0.1.17", default-f
 dunce = "1"
 interprocess = "2.4"
 widestring = "1"
-windows = { version = "0.62", features = ["Win32_System_Com", "Win32_UI_Shell"] }
+windows = { version = "0.62", features = ["Win32_System_Com", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
 windows-sys = { version = "0.61", features = ["Win32_System_Threading"] }
 
 [profile.release]

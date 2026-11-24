@@ -9,6 +9,7 @@ pub use dunce::canonicalize;
 #[cfg(unix)]
 pub use std::fs::canonicalize;
 
+#[cfg(not(windows))]
 use gpui::Window;
 
 /// Starts dragging the window from our custom title bar.
@@ -49,7 +50,7 @@ pub fn start_window_drag(window: &Window) {
     }
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", windows)))]
 pub fn start_window_drag(window: &Window) {
     window.start_window_move();
 }

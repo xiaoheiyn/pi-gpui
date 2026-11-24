@@ -282,6 +282,7 @@ pub struct HubView {
     pending_open: Option<(PathBuf, Option<PathBuf>)>,
     focus_active_chat: bool,
     /// Mouse went down in the title bar; the next move starts a window drag.
+    #[cfg(not(windows))]
     title_bar_drag_pending: bool,
     /// Hidden from the sidebar by the user (app state, pi's files untouched).
     hidden_sessions: HashSet<PathBuf>,
@@ -428,6 +429,7 @@ impl HubView {
             state_path,
             pending_open: None,
             focus_active_chat: false,
+            #[cfg(not(windows))]
             title_bar_drag_pending: false,
             hidden_sessions: HashSet::new(),
             show_hidden: HashSet::new(),
@@ -4133,7 +4135,7 @@ impl HubView {
             .collect();
 
         let corners = crate::window_frame::content_corners(window);
-        h_flex()
+        let title_bar = h_flex()
             .id("title-bar")
             .flex_none()
             .w_full()
@@ -4146,7 +4148,9 @@ impl HubView {
                 colors.title_bar_inactive_background
             })
             .border_b_1()
-            .border_color(colors.border_variant)
+            .border_color(colors.border_variant);
+        #[cfg(not(windows))]
+        let title_bar = title_bar
             .window_control_area(WindowControlArea::Drag)
             .on_mouse_down(
                 MouseButton::Left,
@@ -4178,88 +4182,106 @@ impl HubView {
                 this.on_mouse_down(MouseButton::Right, |event, window, _| {
                     window.show_window_menu(event.position)
                 })
-            })
-            .child(
-                h_flex()
-                    .flex_1()
-                    .min_w(px(0.))
-                    .h_full()
-                    // The breadcrumb starts right after the traffic lights,
-                    // which are hidden in full screen (and absent on Linux).
-                    .pl(px(
-                        if window.is_fullscreen() || !cfg!(target_os = "macos") {
-                            12.
-                        } else {
-                            TRAFFIC_LIGHT_PADDING
-                        },
-                    ))
-                    .pr(px(10.))
-                    .gap(px(12.))
-                    .children(self.render_dock_toggle(DockSide::Left, cx))
-                    .child(div().flex_1().min_w(px(0.)).flex().child(breadcrumb))
-                    .children(plugin_statuses)
-                    .children(status)
-                    .when(
-                        !self.workspaces.iter().all(|entry| entry.chats.is_empty()),
-                        |this| {
-                            this.child(
-                                IconButton::new("reload-sessions", IconName::Refresh)
-                                    .loading(self.reloading_sessions)
-                                    .tooltip(Tooltip::with_keys("Reload all open sessions", "⌘⇧R"))
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        this.reload_sessions(&ReloadSessions, window, cx)
-                                    })),
-                            )
-                        },
-                    )
-                    .when_some(self.active_chat.clone(), |this, chat| {
+            });
+
+        let title_bar = title_bar.child(
+            h_flex()
+                .flex_1()
+                .min_w(px(0.))
+                .h_full()
+                .when(cfg!(windows), |this| this.overflow_hidden())
+                // The breadcrumb starts right after the traffic lights,
+                // which are hidden in full screen (and absent on Linux).
+                .pl(px(
+                    if window.is_fullscreen() || !cfg!(target_os = "macos") {
+                        12.
+                    } else {
+                        TRAFFIC_LIGHT_PADDING
+                    },
+                ))
+                .pr(px(10.))
+                .gap(px(12.))
+                .children(self.render_dock_toggle(DockSide::Left, cx))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w(px(0.))
+                        .flex()
+                        // 窗口拖动区不能盖住左右两侧的按钮，否则 Windows 会接管点击。
+                        .when(cfg!(windows), |this| {
+                            this.h_full()
+                                .items_center()
+                                .window_control_area(WindowControlArea::Drag)
+                        })
+                        .child(breadcrumb),
+                )
+                .children(plugin_statuses)
+                .children(status)
+                .when(
+                    !self.workspaces.iter().all(|entry| entry.chats.is_empty()),
+                    |this| {
                         this.child(
-                            IconButton::new("session-tree", IconName::ListTree)
-                                .tooltip(Tooltip::with_keys("Session tree", "⌘⇧T"))
-                                .on_click(move |_, window, cx| {
-                                    chat.update(cx, |chat, cx| chat.toggle_tree(window, cx))
-                                }),
-                        )
-                    })
-                    .child({
-                        let expanded = cx.global::<DetailsExpanded>().expanded;
-                        IconButton::new(
-                            "toggle-details",
-                            if expanded {
-                                IconName::Eye
-                            } else {
-                                IconName::EyeOff
-                            },
-                        )
-                        .tooltip(Tooltip::with_keys(
-                            if expanded {
-                                "Collapse step details"
-                            } else {
-                                "Expand step details"
-                            },
-                            "⌘⇧E",
-                        ))
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            this.toggle_details(&ToggleDetails, window, cx)
-                        }))
-                    })
-                    .children(self.render_dock_toggle(DockSide::Right, cx))
-                    .when(!cfg!(target_os = "macos"), |this| {
-                        this.child(
-                            IconButton::new("app-menu", IconName::Ellipsis)
-                                .toggle_state(self.app_menu.is_some())
-                                .tooltip(Tooltip::text("Settings and more"))
-                                .on_click(cx.listener(|this, event: &ClickEvent, _, cx| {
-                                    // Below the button, right edges roughly aligned.
-                                    let click = event.position();
-                                    this.app_menu =
-                                        Some(point(click.x + px(14.), click.y + px(18.)));
-                                    cx.notify();
+                            IconButton::new("reload-sessions", IconName::Refresh)
+                                .loading(self.reloading_sessions)
+                                .tooltip(Tooltip::with_keys("Reload all open sessions", "⌘⇧R"))
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.reload_sessions(&ReloadSessions, window, cx)
                                 })),
                         )
-                    })
-                    .children(render_window_controls(window)),
-            )
+                    },
+                )
+                .when_some(self.active_chat.clone(), |this, chat| {
+                    this.child(
+                        IconButton::new("session-tree", IconName::ListTree)
+                            .tooltip(Tooltip::with_keys("Session tree", "⌘⇧T"))
+                            .on_click(move |_, window, cx| {
+                                chat.update(cx, |chat, cx| chat.toggle_tree(window, cx))
+                            }),
+                    )
+                })
+                .child({
+                    let expanded = cx.global::<DetailsExpanded>().expanded;
+                    IconButton::new(
+                        "toggle-details",
+                        if expanded {
+                            IconName::Eye
+                        } else {
+                            IconName::EyeOff
+                        },
+                    )
+                    .tooltip(Tooltip::with_keys(
+                        if expanded {
+                            "Collapse step details"
+                        } else {
+                            "Expand step details"
+                        },
+                        "⌘⇧E",
+                    ))
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.toggle_details(&ToggleDetails, window, cx)
+                    }))
+                })
+                .children(self.render_dock_toggle(DockSide::Right, cx))
+                .when(!cfg!(target_os = "macos"), |this| {
+                    this.child(
+                        IconButton::new("app-menu", IconName::Ellipsis)
+                            .toggle_state(self.app_menu.is_some())
+                            .tooltip(Tooltip::text("Settings and more"))
+                            .on_click(cx.listener(|this, event: &ClickEvent, _, cx| {
+                                // Below the button, right edges roughly aligned.
+                                let click = event.position();
+                                this.app_menu = Some(point(click.x + px(14.), click.y + px(18.)));
+                                cx.notify();
+                            })),
+                    )
+                })
+                .when(!cfg!(windows), |this| {
+                    this.children(render_window_controls(window))
+                }),
+        );
+        #[cfg(windows)]
+        let title_bar = title_bar.children(crate::window_frame::windows_controls(window, cx));
+        title_bar
     }
 
     /// Title bar button for a dock, hidden while the dock holds no panels.

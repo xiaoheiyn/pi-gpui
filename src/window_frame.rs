@@ -12,6 +12,112 @@ use gpui::{
 
 use crate::ui::ActiveTheme as _;
 
+#[cfg(windows)]
+pub fn windows_controls(window: &Window, cx: &App) -> Option<gpui::Div> {
+    use gpui::{AccessibleAction, ClickEvent, Role, WindowControlArea};
+    use windows::Win32::UI::WindowsAndMessaging::{SC_CLOSE, SC_MAXIMIZE, SC_MINIMIZE, SC_RESTORE};
+
+    use crate::ui::{Color, Icon, IconName, IconSize, Tooltip, h_flex};
+
+    if window.is_fullscreen() {
+        return None;
+    }
+    let colors = &cx.theme().colors;
+    let hover = colors.ghost_element_hover;
+    let active = colors.ghost_element_active;
+    let button = |id, area, icon, label, command| {
+        div()
+            .id(id)
+            .role(Role::Button)
+            .aria_label(label)
+            .tab_index(0)
+            .flex()
+            .items_center()
+            .justify_center()
+            .size(px(32.))
+            .rounded(px(5.))
+            .hover(|style| style.bg(hover))
+            .focus_visible(|style| style.bg(hover))
+            .active(|style| style.bg(active))
+            .window_control_area(area)
+            .tooltip(Tooltip::text(label))
+            // 鼠标由 GPUI 的 Windows 非客户区处理，键盘和读屏需单独投递系统命令。
+            .on_click(move |event, window, _| {
+                if let ClickEvent::Keyboard(_) = event {
+                    post_window_command(window, command);
+                }
+            })
+            .on_a11y_action(AccessibleAction::Click, move |_, window, _| {
+                post_window_command(window, command);
+            })
+            .child(Icon::new(icon).size(IconSize::Small).color(Color::Default))
+    };
+    let (max_icon, max_label, max_command) = if window.is_maximized() {
+        (IconName::Restore, "Restore", SC_RESTORE)
+    } else {
+        (IconName::Maximize, "Maximize", SC_MAXIMIZE)
+    };
+    Some(
+        h_flex()
+            .tab_group()
+            .flex_none()
+            .h_full()
+            .gap(px(4.))
+            .pr(px(6.))
+            .when(window.is_minimizable(), |this| {
+                this.child(button(
+                    "window-minimize",
+                    WindowControlArea::Min,
+                    IconName::Dash,
+                    "Minimize",
+                    SC_MINIMIZE,
+                ))
+            })
+            .when(window.is_resizable(), |this| {
+                this.child(button(
+                    "window-maximize",
+                    WindowControlArea::Max,
+                    max_icon,
+                    max_label,
+                    max_command,
+                ))
+            })
+            .child(button(
+                "window-close",
+                WindowControlArea::Close,
+                IconName::Close,
+                "Close",
+                SC_CLOSE,
+            )),
+    )
+}
+
+#[cfg(windows)]
+fn post_window_command(window: &Window, command: u32) {
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
+    use windows::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_SYSCOMMAND};
+
+    let Ok(handle) = HasWindowHandle::window_handle(window) else {
+        return;
+    };
+    let RawWindowHandle::Win32(handle) = handle.as_raw() else {
+        return;
+    };
+    // SAFETY: 句柄来自当前存活的窗口，系统命令只携带整数参数。
+    let result = unsafe {
+        PostMessageW(
+            Some(HWND(handle.hwnd.get() as _)),
+            WM_SYSCOMMAND,
+            WPARAM(command as usize),
+            LPARAM(0),
+        )
+    };
+    if let Err(error) = result {
+        eprintln!("pi-gpui: could not post window command: {error}");
+    }
+}
+
 /// Room around the window for the shadow; also where resizing starts.
 const SHADOW: Pixels = px(10.);
 const ROUNDING: Pixels = px(10.);
