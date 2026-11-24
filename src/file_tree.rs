@@ -704,7 +704,7 @@ fn git_state(workspace: &Path) -> GitState {
         return GitState::default();
     };
     let root = PathBuf::from(String::from_utf8_lossy(&root).trim_end_matches(['\n', '\r']));
-    let Some(status) = run(&["status", "--porcelain=v1", "-z", "--ignored"]) else {
+    let Some(status) = run(&["status", "--porcelain=v1", "-z", "--ignored=matching"]) else {
         return GitState::default();
     };
     let mut state = parse_status(&String::from_utf8_lossy(&status), &root);
