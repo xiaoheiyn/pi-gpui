@@ -1141,10 +1141,10 @@ impl TextInput {
         }
     }
 
-    fn offset_from_utf16(&self, offset: usize) -> usize {
+    fn offset_from_utf16(text: &str, offset: usize) -> usize {
         let mut utf8_offset = 0;
         let mut utf16_count = 0;
-        for character in self.content.chars() {
+        for character in text.chars() {
             if utf16_count >= offset {
                 break;
             }
@@ -1171,8 +1171,9 @@ impl TextInput {
         self.offset_to_utf16(range.start)..self.offset_to_utf16(range.end)
     }
 
-    fn range_from_utf16(&self, range_utf16: &Range<usize>) -> Range<usize> {
-        self.offset_from_utf16(range_utf16.start)..self.offset_from_utf16(range_utf16.end)
+    fn range_from_utf16(text: &str, range_utf16: &Range<usize>) -> Range<usize> {
+        Self::offset_from_utf16(text, range_utf16.start)
+            ..Self::offset_from_utf16(text, range_utf16.end)
     }
 }
 
@@ -1184,7 +1185,7 @@ impl EntityInputHandler for TextInput {
         _window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<String> {
-        let range = self.clamp_range(self.range_from_utf16(&range_utf16));
+        let range = self.clamp_range(Self::range_from_utf16(&self.content, &range_utf16));
         actual_range.replace(self.range_to_utf16(&range));
         Some(self.content[range].to_string())
     }
@@ -1226,7 +1227,7 @@ impl EntityInputHandler for TextInput {
         self.plugin_insertion = None;
         let range = range_utf16
             .as_ref()
-            .map(|range_utf16| self.range_from_utf16(range_utf16))
+            .map(|range_utf16| Self::range_from_utf16(&self.content, range_utf16))
             .or(self.marked_range.clone())
             .unwrap_or(self.selected_range.clone());
         let new_text = self.normalize(new_text);
@@ -1252,7 +1253,7 @@ impl EntityInputHandler for TextInput {
         self.plugin_insertion = None;
         let range = range_utf16
             .as_ref()
-            .map(|range_utf16| self.range_from_utf16(range_utf16))
+            .map(|range_utf16| Self::range_from_utf16(&self.content, range_utf16))
             .or(self.marked_range.clone())
             .unwrap_or(self.selected_range.clone());
         let range = self.clamp_range(range);
@@ -1267,12 +1268,15 @@ impl EntityInputHandler for TextInput {
         .into();
         self.marked_range =
             (!new_text.is_empty()).then(|| range.start..range.start + new_text.len());
+        // 输入法的选区相对于预编辑文本，正文前缀不参与偏移量换算。
         let selection = new_selected_range_utf16
             .as_ref()
-            .map(|range_utf16| self.range_from_utf16(range_utf16))
-            .map(|new_range| new_range.start + range.start..new_range.end + range.start)
-            .unwrap_or_else(|| range.start + new_text.len()..range.start + new_text.len());
-        self.select_range(selection, false);
+            .map(|range_utf16| Self::range_from_utf16(new_text, range_utf16))
+            .unwrap_or(new_text.len()..new_text.len());
+        self.select_range(
+            range.start + selection.start..range.start + selection.end,
+            false,
+        );
         cx.notify();
     }
 
@@ -1284,7 +1288,7 @@ impl EntityInputHandler for TextInput {
         _cx: &mut Context<Self>,
     ) -> Option<Bounds<Pixels>> {
         let layout = self.last_layout.as_ref()?;
-        let range = self.range_from_utf16(&range_utf16);
+        let range = Self::range_from_utf16(&self.content, &range_utf16);
         let start = layout.position_for_offset(range.start);
         let end = layout.position_for_offset(range.end);
         Some(Bounds::from_corners(
@@ -1813,6 +1817,121 @@ mod tests {
     use super::*;
 
     const TEXT: &str = "fix the größe bug,  now\nsecond line";
+
+    #[cfg(windows)]
+    #[test]
+    fn ime_caret_is_relative_to_the_composition() {
+        use gpui::{PlatformInput, WindowOptions};
+        use std::{cell::RefCell, rc::Rc};
+
+        let prefix = format!("{}还剩多少", "这是前面粘贴的文本。\n".repeat(18));
+        let suffix = format!("份需要处理\n{}", "这是后面粘贴的文本。\n".repeat(18));
+        let start = prefix.len();
+        let results = Rc::new(RefCell::new(Vec::new()));
+        let actual = results.clone();
+        gpui_platform::application().run(move |cx| {
+            cx.set_global(crate::ui::Theme::dracula(false));
+            let window = cx
+                .open_window(
+                    WindowOptions {
+                        show: false,
+                        focus: false,
+                        ..Default::default()
+                    },
+                    |_, cx| cx.new(|cx| TextInput::new("", cx).with_attachments()),
+                )
+                .expect("hidden editor window");
+            window
+                .update(cx, |input, window, cx| {
+                    EntityInputHandler::paste(
+                        input,
+                        ClipboardItem::new_string(format!("{prefix}{suffix}")),
+                        window,
+                        cx,
+                    );
+                })
+                .expect("paste long text into the editor");
+            let field = window.entity(cx).expect("editor entity");
+            cx.update_window(window.into(), |_, window, cx| {
+                window.draw(cx).clear(cx);
+                let input = field.read(cx);
+                let position = input
+                    .last_layout
+                    .as_ref()
+                    .expect("laid-out text")
+                    .position_for_offset(start);
+                let viewport = input.scroll_handle.bounds();
+                input
+                    .scroll_handle
+                    .set_offset(point(px(0.), viewport.size.height / 2. - position.y));
+                window.refresh();
+                window.draw(cx).clear(cx);
+
+                let input = field.read(cx);
+                let position = input.last_bounds.expect("text bounds").origin
+                    + input
+                        .last_layout
+                        .as_ref()
+                        .expect("scrolled text layout")
+                        .position_for_offset(start)
+                    + point(px(0.), px(LINE_HEIGHT / 2.));
+                let in_viewport = input.scroll_handle.bounds().contains(&position)
+                    && input.scroll_handle.offset().y < px(0.);
+                window.dispatch_event(
+                    PlatformInput::MouseDown(MouseDownEvent {
+                        button: MouseButton::Left,
+                        position,
+                        click_count: 1,
+                        ..Default::default()
+                    }),
+                    cx,
+                );
+                window.dispatch_event(
+                    PlatformInput::MouseUp(MouseUpEvent {
+                        button: MouseButton::Left,
+                        position,
+                        click_count: 1,
+                        ..Default::default()
+                    }),
+                    cx,
+                );
+                field.update(cx, |input, cx| {
+                    let mut actual = actual.borrow_mut();
+                    actual.push((in_viewport, input.cursor_offset()));
+                    for (composition, caret) in [("sad", 3), ("a🍎b", 3), ("拼", 99)] {
+                        input.replace_and_mark_text_in_range(
+                            None,
+                            composition,
+                            Some(caret..caret),
+                            window,
+                            cx,
+                        );
+                        actual.push((
+                            input.content.as_ref() == format!("{prefix}{composition}{suffix}"),
+                            input.cursor_offset(),
+                        ));
+                    }
+                    input.replace_text_in_range(None, "知道", window, cx);
+                    actual.push((
+                        input.content.as_ref() == format!("{prefix}知道{suffix}"),
+                        input.cursor_offset(),
+                    ));
+                });
+            })
+            .expect("click and apply IME updates in the scrolled editor");
+            cx.quit();
+        });
+        assert_eq!(
+            *results.borrow(),
+            [
+                (true, start),
+                (true, start + "sad".len()),
+                (true, start + "a🍎".len()),
+                (true, start + "拼".len()),
+                (true, start + "知道".len()),
+            ]
+        );
+    }
 
     #[test]
     fn word_navigation_skips_punctuation_and_spaces() {
