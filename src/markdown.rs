@@ -5,7 +5,9 @@
 
 mod flowchart;
 
+use std::cell::RefCell;
 use std::ops::Range;
+use std::rc::Rc;
 
 use gpui::{
     AnyElement, App, ClipboardItem, ElementId, Entity, FontWeight, Hsla, Pixels, SharedString,
@@ -13,7 +15,7 @@ use gpui::{
 };
 use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 
-use crate::selectable::{SelectableText, SpanStyle, TextSelection};
+use crate::selectable::{SelectableText, SpanStyle, TextDocument, TextSelection};
 use crate::settings::Settings;
 use crate::ui::prelude::*;
 
@@ -370,6 +372,8 @@ pub fn render(
     let settings = Settings::get(cx);
     let renderer = Renderer {
         selection,
+        document: Rc::new(TextDocument::new(key)),
+        plain_text: RefCell::new(String::new()),
         cx,
         body: settings.agent_font_size,
         body_line: settings.agent_line_height(),
@@ -378,7 +382,7 @@ pub fn render(
         code_font: settings.buffer_font_family.clone(),
     };
     let last = nodes.len().saturating_sub(1);
-    v_flex()
+    let answer = v_flex()
         .w_full()
         .text_size(px(renderer.body))
         .line_height(px(renderer.body_line))
@@ -389,8 +393,9 @@ pub fn render(
                 last: index == last,
             };
             renderer.node(&format!("{key}:{index}"), node, edge)
-        }))
-        .into_any_element()
+        }));
+    renderer.document.finish(renderer.plain_text.into_inner());
+    answer.into_any_element()
 }
 
 #[derive(Clone, Copy, Default)]
@@ -401,6 +406,8 @@ struct Edges {
 
 struct Renderer<'a> {
     selection: &'a Entity<TextSelection>,
+    document: Rc<TextDocument>,
+    plain_text: RefCell<String>,
     cx: &'a App,
     body: f32,
     body_line: f32,
@@ -410,8 +417,19 @@ struct Renderer<'a> {
 }
 
 impl Renderer<'_> {
-    fn text(&self, key: String, inline: &Inline) -> SelectableText {
-        SelectableText::new(key, inline.text.clone(), self.selection)
+    fn fragment(&self, key: String, text: &str, separator: &str) -> SelectableText {
+        let mut plain_text = self.plain_text.borrow_mut();
+        if !plain_text.is_empty() {
+            plain_text.push_str(separator);
+        }
+        let start = plain_text.len();
+        plain_text.push_str(text);
+        SelectableText::new(key, text.to_owned(), self.selection)
+            .in_document(self.document.clone(), start)
+    }
+
+    fn text(&self, key: String, inline: &Inline, separator: &str) -> SelectableText {
+        self.fragment(key, &inline.text, separator)
             .spans(inline.spans.clone())
             .text_size(px(self.body), px(self.body_line))
     }
@@ -431,7 +449,7 @@ impl Renderer<'_> {
         match node {
             Node::Paragraph { inline, tight } => div()
                 .when(!tight, |this| this.mb(bottom(PARAGRAPH_SPACING)))
-                .child(self.text(key.to_string(), inline))
+                .child(self.text(key.to_string(), inline, "\n"))
                 .into_any_element(),
             Node::Heading { level, inline } => {
                 // Zed's agent heading sizes: 1.15, 1.1, 1.05, 1, 0.95, 0.875 of the body.
@@ -441,7 +459,7 @@ impl Renderer<'_> {
                     .mt(top(if *level == 1 { 16. } else { 24. }))
                     .mb(bottom(8.))
                     .child(
-                        self.text(key.to_string(), inline)
+                        self.text(key.to_string(), inline, "\n")
                             .text_size(px(size), px(self.body_line.max(size * 1.3))),
                     )
                     .into_any_element()
@@ -540,7 +558,7 @@ impl Renderer<'_> {
             .flex()
             .overflow_x_scroll()
             .child(
-                SelectableText::new(key.to_string(), text.to_string(), self.selection)
+                self.fragment(key.to_string(), text, "\n")
                     .spans(spans)
                     .text_size(px(self.code), px(self.code_line))
                     .font_family(self.code_font.clone())
@@ -628,6 +646,7 @@ impl Renderer<'_> {
                         self.text(
                             format!("{key}.{row_index}.{column}"),
                             row.get(column).unwrap_or(&empty),
+                            if column == 0 { "\n" } else { "\t" },
                         )
                         .when(header && row_index == 0, |this| {
                             this.weight(FontWeight::SEMIBOLD)
@@ -712,6 +731,84 @@ mod tests {
             Node::Code { text, .. } => text,
             _ => "",
         }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn dragging_across_markdown_paragraphs_selects_one_range() {
+        use gpui::{
+            AppContext as _, Bounds, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
+            PlatformInput, WindowBounds, WindowOptions, point, size,
+        };
+
+        struct Answer(Entity<TextSelection>);
+        impl gpui::Render for Answer {
+            fn render(&mut self, _: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
+                super::render("answer", &parse("甲乙丙\n\n丁戊己"), &self.0, cx)
+            }
+        }
+
+        let results = Rc::new(RefCell::new(Vec::new()));
+        let actual = results.clone();
+        gpui_platform::application().run(move |cx| {
+            cx.set_global(Settings::default());
+            cx.set_global(crate::ui::Theme::dracula(false));
+            let selection = cx.new(|cx| TextSelection::new(cx.focus_handle()));
+            let window = cx
+                .open_window(
+                    WindowOptions {
+                        show: false,
+                        focus: false,
+                        window_bounds: Some(WindowBounds::Windowed(Bounds::new(
+                            point(px(0.), px(0.)),
+                            size(px(320.), px(180.)),
+                        ))),
+                        ..Default::default()
+                    },
+                    |_, cx| cx.new(|_| Answer(selection.clone())),
+                )
+                .expect("hidden chat window");
+            window
+                .update(cx, |_, window, cx| {
+                    let first = point(px(0.), px(5.));
+                    let second = point(px(220.), px(Settings::get(cx).agent_line_height() + 10.));
+                    for (start, end) in [(first, second), (second, first)] {
+                        window.dispatch_event(
+                            PlatformInput::MouseDown(MouseDownEvent {
+                                button: MouseButton::Left,
+                                position: start,
+                                click_count: 1,
+                                ..Default::default()
+                            }),
+                            cx,
+                        );
+                        window.dispatch_event(
+                            PlatformInput::MouseMove(MouseMoveEvent {
+                                position: end,
+                                pressed_button: Some(MouseButton::Left),
+                                ..Default::default()
+                            }),
+                            cx,
+                        );
+                        window.dispatch_event(
+                            PlatformInput::MouseUp(MouseUpEvent {
+                                button: MouseButton::Left,
+                                position: end,
+                                click_count: 1,
+                                ..Default::default()
+                            }),
+                            cx,
+                        );
+                        actual.borrow_mut().push(selection.read(cx).selected_text());
+                    }
+                })
+                .expect("dispatch mouse events to the chat window");
+            cx.quit();
+        });
+        assert_eq!(
+            *results.borrow(),
+            [Some("甲乙丙\n丁戊己".into()), Some("甲乙丙\n丁戊己".into())]
+        );
     }
 
     #[test]

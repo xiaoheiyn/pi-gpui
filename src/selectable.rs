@@ -2,10 +2,10 @@
 //! thoughts and tool output in the transcript. Plain GPUI text cannot be
 //! selected, so this element shapes and paints its text itself.
 //!
-//! A selection lives inside one block (one message, one thought...). It is
-//! stored in a shared [`TextSelection`] entity rather than in the element, so
-//! it survives the virtualized list re-creating rows while scrolling.
+//! 选区属于逻辑文档，因为虚拟列表会在滚动时重新创建文本元素。
 
+use std::cell::{OnceCell, RefCell};
+use std::collections::BTreeMap;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -13,9 +13,9 @@ use std::rc::Rc;
 use gpui::{
     App, AvailableSpace, Bounds, Context, CursorStyle, DispatchPhase, ElementId, Entity,
     FocusHandle, FontStyle, FontWeight, GlobalElementId, Hitbox, HitboxBehavior, Hsla, LayoutId,
-    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad, Pixels, SharedString,
-    StrikethroughStyle, Style, TextAlign, TextRun, UnderlineStyle, Window, WrappedLine, fill,
-    point, prelude::*, px, relative, size,
+    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad, Pixels, Point,
+    SharedString, StrikethroughStyle, Style, TextAlign, TextRun, UnderlineStyle, Window,
+    WrappedLine, fill, point, prelude::*, px, relative, size,
 };
 
 use crate::text_input::{TextLayout, paragraph_range_at, word_range_at};
@@ -35,7 +35,9 @@ pub struct SpanStyle {
 }
 
 pub struct TextSelection {
-    block: Option<SharedString>,
+    // 仍由起点元素处理拖动和链接点击，避免多个片段同时改写选区。
+    origin: Option<SharedString>,
+    document: Option<SharedString>,
     text: SharedString,
     anchor: usize,
     head: usize,
@@ -49,7 +51,8 @@ pub struct TextSelection {
 impl TextSelection {
     pub fn new(copy_focus: FocusHandle) -> Self {
         Self {
-            block: None,
+            origin: None,
+            document: None,
             text: SharedString::default(),
             anchor: 0,
             head: 0,
@@ -66,13 +69,16 @@ impl TextSelection {
 
     pub fn selected_text(&self) -> Option<String> {
         let range = self.range();
-        (!range.is_empty())
-            .then(|| self.text.get(range).map(str::to_string))
-            .flatten()
+        if self.origin.is_none() || range.is_empty() {
+            return None;
+        }
+        self.text.get(range).map(str::to_owned)
     }
 
     pub fn clear(&mut self, cx: &mut Context<Self>) {
-        if self.block.take().is_some() {
+        if self.origin.take().is_some() {
+            self.document = None;
+            self.text = SharedString::default();
             self.dragging = false;
             cx.notify();
         }
@@ -83,26 +89,63 @@ impl TextSelection {
     }
 
     fn range_in(&self, key: &SharedString) -> Option<Range<usize>> {
-        (self.block.as_ref() == Some(key)).then(|| self.range())
+        (self.document.as_ref() == Some(key)).then(|| self.range())
+    }
+}
+
+pub(crate) struct TextDocument {
+    key: SharedString,
+    text: OnceCell<SharedString>,
+    // 坐标只属于这一轮渲染，不能随选区跨帧保存。
+    fragments: RefCell<BTreeMap<usize, TextFragment>>,
+}
+
+struct TextFragment {
+    len: usize,
+    bounds: Bounds<Pixels>,
+    layout: Rc<TextLayout>,
+}
+
+impl TextDocument {
+    pub(crate) fn new(key: &str) -> Self {
+        Self {
+            key: key.to_owned().into(),
+            text: OnceCell::new(),
+            fragments: RefCell::new(BTreeMap::new()),
+        }
     }
 
-    fn begin(&mut self, key: SharedString, text: SharedString, offset: usize, clicks: usize) {
-        let range = match clicks {
-            2 => word_range_at(&text, offset),
-            3.. => paragraph_range_at(&text, offset),
-            _ => offset..offset,
+    pub(crate) fn finish(&self, text: String) {
+        self.text
+            .set(text.into())
+            .expect("selection document is built once per render");
+    }
+
+    fn offset_for_position(&self, position: Point<Pixels>) -> Option<usize> {
+        let fragments = self.fragments.borrow();
+        let (&start, fragment) = fragments.iter().min_by_key(|(_, fragment)| {
+            let bounds = fragment.bounds;
+            let vertical = (bounds.top() - position.y).max(position.y - bounds.bottom());
+            let horizontal = (bounds.left() - position.x).max(position.x - bounds.right());
+            (vertical.max(px(0.)), horizontal.max(px(0.)))
+        })?;
+        let offset = if position.y < fragment.bounds.top() {
+            0
+        } else if position.y >= fragment.bounds.bottom() {
+            fragment.len
+        } else {
+            fragment
+                .layout
+                .offset_for_position(position - fragment.bounds.origin)
         };
-        self.block = Some(key);
-        self.text = text;
-        self.anchor = range.start;
-        self.head = range.end;
-        self.dragging = clicks == 1;
+        Some(start + offset)
     }
 }
 
 pub struct SelectableText {
     key: SharedString,
     text: SharedString,
+    document: Option<(Rc<TextDocument>, usize)>,
     selection: Entity<TextSelection>,
     color: Option<Color>,
     size: Option<LabelSize>,
@@ -127,6 +170,7 @@ impl SelectableText {
         Self {
             key: key.into(),
             text: text.into(),
+            document: None,
             selection: selection.clone(),
             color: None,
             size: None,
@@ -138,6 +182,11 @@ impl SelectableText {
             no_wrap: false,
             spans: Rc::from([]),
         }
+    }
+
+    pub(crate) fn in_document(mut self, document: Rc<TextDocument>, fragment: usize) -> Self {
+        self.document = Some((document, fragment));
+        self
     }
 
     pub fn font_family(mut self, family: impl Into<SharedString>) -> Self {
@@ -379,9 +428,15 @@ impl Element for SelectableText {
         let wrap_width = (!self.no_wrap).then_some(bounds.size.width);
         let layout = self.shape(wrap_width, window, cx).map(Rc::new);
         let mut selections = Vec::new();
-        if let (Some(layout), Some(range)) = (&layout, self.selection.read(cx).range_in(&self.key))
+        let (document_key, start) = self
+            .document
+            .as_ref()
+            .map_or((&self.key, 0), |(doc, start)| (&doc.key, *start));
+        if let (Some(layout), Some(range)) =
+            (&layout, self.selection.read(cx).range_in(document_key))
         {
-            let range = range.start.min(self.text.len())..range.end.min(self.text.len());
+            let local = |offset: usize| offset.saturating_sub(start).min(self.text.len());
+            let range = local(range.start)..local(range.end);
             if !range.is_empty() {
                 let start = layout.position_for_offset(range.start);
                 let end = layout.position_for_offset(range.end);
@@ -463,18 +518,46 @@ impl Element for SelectableText {
         let selection = self.selection.clone();
         let key = self.key.clone();
         let text = self.text.clone();
+        let document = self.document.clone();
+        if let Some((document, start)) = &document
+            && !text.is_empty()
+        {
+            document.fragments.borrow_mut().insert(
+                *start,
+                TextFragment {
+                    len: text.len(),
+                    bounds,
+                    layout: layout.clone(),
+                },
+            );
+        }
         window.on_mouse_event({
             let layout = layout.clone();
             let selection = selection.clone();
             let key = key.clone();
+            let document = document.clone();
             move |event: &MouseDownEvent, phase, window, cx| {
                 if phase != DispatchPhase::Bubble || event.button != MouseButton::Left {
                     return;
                 }
                 if hitbox.is_hovered(window) {
                     let offset = layout.offset_for_position(event.position - origin);
+                    let range = match event.click_count {
+                        2 => word_range_at(&text, offset),
+                        3.. => paragraph_range_at(&text, offset),
+                        _ => offset..offset,
+                    };
                     let focus = selection.update(cx, |selection, cx| {
-                        selection.begin(key.clone(), text.clone(), offset, event.click_count);
+                        let (document_key, start, source) = document
+                            .as_ref()
+                            .and_then(|(doc, start)| Some((&doc.key, *start, doc.text.get()?)))
+                            .unwrap_or((&key, 0, &text));
+                        selection.origin = Some(key.clone());
+                        selection.document = Some(document_key.clone());
+                        selection.text = source.clone();
+                        selection.anchor = start + range.start;
+                        selection.head = start + range.end;
+                        selection.dragging = event.click_count == 1;
                         cx.notify();
                         selection.copy_focus.clone()
                     });
@@ -483,7 +566,7 @@ impl Element for SelectableText {
                     // A click elsewhere ends this block's selection. If the click
                     // started a selection in another block, that block owns it now.
                     selection.update(cx, |selection, cx| {
-                        if selection.block.as_ref() == Some(&key) {
+                        if selection.origin.as_ref() == Some(&key) {
                             selection.clear(cx);
                         }
                     });
@@ -495,18 +578,31 @@ impl Element for SelectableText {
             let selection = selection.clone();
             let key = key.clone();
             move |event: &MouseMoveEvent, phase, _window, cx| {
-                if phase != DispatchPhase::Bubble {
+                if phase != DispatchPhase::Bubble || !event.dragging() {
                     return;
                 }
-                let dragging_here = {
-                    let selection = selection.read(cx);
-                    selection.dragging && selection.block.as_ref() == Some(&key)
+                let current = selection.read(cx);
+                if !current.dragging || current.origin.as_ref() != Some(&key) {
+                    return;
+                }
+                let (offset, source) = match &document {
+                    Some((document, start)) => (
+                        document
+                            .offset_for_position(event.position)
+                            .unwrap_or_else(|| {
+                                start + layout.offset_for_position(event.position - origin)
+                            }),
+                        document.text.get(),
+                    ),
+                    None => (layout.offset_for_position(event.position - origin), None),
                 };
-                if dragging_here {
-                    let offset = layout.offset_for_position(event.position - origin);
+                let source = source.unwrap_or(&current.text);
+                if source.is_char_boundary(current.anchor) && source.is_char_boundary(offset) {
+                    let source = source.clone();
                     selection.update(cx, |selection, cx| {
-                        if selection.head != offset {
+                        if selection.head != offset || selection.text != source {
                             selection.head = offset;
+                            selection.text = source;
                             cx.notify();
                         }
                     });
@@ -520,11 +616,11 @@ impl Element for SelectableText {
             .collect();
         let hitbox = prepaint.hitbox.clone();
         window.on_mouse_event(move |event: &MouseUpEvent, phase, window, cx| {
-            if phase != DispatchPhase::Bubble {
+            if phase != DispatchPhase::Bubble || event.button != MouseButton::Left {
                 return;
             }
             let clicked = selection.update(cx, |selection, _| {
-                let owned = selection.block.as_ref() == Some(&key);
+                let owned = selection.origin.as_ref() == Some(&key);
                 let clicked = owned && selection.dragging && selection.range().is_empty();
                 if owned {
                     selection.dragging = false;
