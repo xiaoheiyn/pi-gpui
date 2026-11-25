@@ -8,8 +8,8 @@ mod flowchart;
 use std::ops::Range;
 
 use gpui::{
-    AnyElement, App, ClipboardItem, ElementId, Entity, FontWeight, Hsla, SharedString, Window, div,
-    px,
+    AnyElement, App, ClipboardItem, ElementId, Entity, FontWeight, Hsla, Pixels, SharedString,
+    Window, div, px,
 };
 use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 
@@ -629,7 +629,6 @@ impl Renderer<'_> {
                             format!("{key}.{row_index}.{column}"),
                             row.get(column).unwrap_or(&empty),
                         )
-                        .no_wrap()
                         .when(header && row_index == 0, |this| {
                             this.weight(FontWeight::SEMIBOLD)
                         })
@@ -638,7 +637,6 @@ impl Renderer<'_> {
             })
             .collect();
         Table {
-            key: format!("{key}:table").into(),
             rows,
             header,
             edges,
@@ -648,7 +646,6 @@ impl Renderer<'_> {
 
 #[derive(IntoElement)]
 struct Table {
-    key: SharedString,
     rows: Vec<Vec<SelectableText>>,
     header: bool,
     edges: Edges,
@@ -661,15 +658,17 @@ impl RenderOnce for Table {
         let mut widths = vec![px(0.); self.rows.first().map_or(0, Vec::len)];
         for row in &self.rows {
             for (column, cell) in row.iter().enumerate() {
-                widths[column] = widths[column].max(cell.unwrapped_width(window, cx));
+                widths[column] = widths[column].max(cell.unwrapped_width(window, cx) + px(10.));
             }
         }
         let border = colors.border;
         let header_background = colors.title_bar_background;
         let stripe = colors.panel_background;
 
-        let table = v_flex()
-            .flex_none()
+        v_flex()
+            .w(widths.iter().sum::<Pixels>() + px(2.))
+            .max_w_full()
+            .mb(if self.edges.last { px(0.) } else { px(8.) })
             .border_1()
             .border_color(border)
             .rounded(px(2.))
@@ -690,24 +689,16 @@ impl RenderOnce for Table {
                     .when_some(background, |this, background| this.bg(background))
                     .when(row_index > 0, |this| this.border_t_1().border_color(border))
                     .children(row.into_iter().enumerate().map(|(column, cell)| {
+                        // 各行用同一组首选列宽收缩，保证列边框对齐。
                         div()
-                            .w(widths[column] + px(8. + 2.))
-                            .flex_none()
+                            .w(widths[column])
+                            .min_w(px(0.))
                             .px(px(4.))
                             .py(px(2.))
                             .when(column > 0, |this| this.border_l_1().border_color(border))
                             .child(cell)
                     }))
-            }));
-
-        let mut scroller = div()
-            .id(ElementId::Name(self.key))
-            .flex()
-            .overflow_x_scroll()
-            .mb(if self.edges.last { px(0.) } else { px(8.) })
-            .child(table);
-        scroller.style().restrict_scroll_to_axis = Some(true);
-        scroller
+            }))
     }
 }
 
